@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *.class
@@ -31,11 +31,9 @@ wheels/
 *~
 .DS_Store
 
-# Streamlit
-.streamlit/
-
-# Data files
+# Data files (but keep example file)
 *.csv
 *.txt
 *.dat
 !requirements.txt
+!example_spectrum.csv

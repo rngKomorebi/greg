@@ -76,6 +76,9 @@ tab1, tab2, tab3 = st.tabs(
 # ============================================================================
 with tab1:
     st.header("Output Angle Analysis")
+    st.markdown(
+        r"**Grating equation:** $m\lambda = d(\sin\alpha + \sin\beta)$"
+    )
 
     # Create columns for layout
     col1, col2 = st.columns([2, 1])
@@ -106,7 +109,7 @@ with tab1:
             "Incident angle α (°)",
             min_value=0.0,
             max_value=90.0,
-            value=30.0,
+            value=45.0,
             step=1.0,
             key="alpha_deg_oa",
         )
@@ -216,7 +219,7 @@ with tab1:
         # Generate plot data
         alphas = np.arange(alpha_min, alpha_max + alpha_step / 2, alpha_step)
         betas = []
-        wavelengths_for_color = []
+        nm_per_pixel_values = []
 
         for a in alphas:
             try:
@@ -224,20 +227,37 @@ with tab1:
                     order_m, wavelength_nm, int(lines_per_mm), a
                 )
                 betas.append(b)
-                wavelengths_for_color.append(wavelength_nm)
+                # Calculate nm/pixel for this alpha
+                try:
+                    nm_pp = pc.nm_per_pixel(
+                        p=pixel_pitch_um * 1e-6,
+                        lines_per_mm=lines_per_mm,
+                        alpha_deg=a,
+                        lambda_nm=wavelength_nm,
+                        m=order_m,
+                        f=focal_length_mm * 1e-3,
+                    )
+                    nm_per_pixel_values.append(nm_pp)
+                except:
+                    nm_per_pixel_values.append(np.nan)
             except:
                 betas.append(np.nan)
-                wavelengths_for_color.append(np.nan)
+                nm_per_pixel_values.append(np.nan)
 
-        # Create figure
-        fig = Figure(figsize=(10, 6))
-        ax = fig.add_subplot(111)
+        # Create figure with dark theme
+        fig = Figure(figsize=(10, 6), facecolor="#0e1117")
+        ax = fig.add_subplot(111, facecolor="#0e1117")
+        ax.tick_params(colors="white", which="both")
+        ax.spines["bottom"].set_color("white")
+        ax.spines["top"].set_color("white")
+        ax.spines["left"].set_color("white")
+        ax.spines["right"].set_color("white")
 
         # Plot β vs α with colormap
         scatter = ax.scatter(
             alphas,
             betas,
-            c=wavelengths_for_color,
+            c=nm_per_pixel_values,
             cmap=colormap,
             s=marker_size,
             alpha=0.8,
@@ -250,10 +270,10 @@ with tab1:
             ax.scatter(
                 [alpha_deg],
                 [beta_current],
-                color="red",
+                color="#FFD10F",
                 s=marker_size * 3,
                 marker="*",
-                edgecolors="black",
+                edgecolors="#F2B705",
                 linewidths=1.5,
                 zorder=10,
                 label=f"Current: α={alpha_deg}°, β={beta_current:.2f}°",
@@ -297,18 +317,30 @@ with tab1:
             except:
                 pass
 
-        ax.set_xlabel("Incident Angle α (°)", fontsize=12, fontweight="bold")
-        ax.set_ylabel("Output Angle β (°)", fontsize=12, fontweight="bold")
+        ax.set_xlabel(
+            "Incident Angle α (°)",
+            fontsize=12,
+            fontweight="bold",
+            color="white",
+        )
+        ax.set_ylabel(
+            "Output Angle β (°)", fontsize=12, fontweight="bold", color="white"
+        )
         ax.set_title(
             f"Output Angle vs Incident Angle\n{int(lines_per_mm)} lines/mm, λ={wavelength_nm:.0f} nm, m={order_m}",
             fontsize=14,
             fontweight="bold",
+            color="white",
         )
-        ax.grid(True, alpha=0.3, linestyle="--")
+        ax.grid(True, alpha=0.3, linestyle="--", color="gray")
         ax.legend(loc="best")
 
-        # Add colorbar
-        cbar = fig.colorbar(scatter, ax=ax, label="Wavelength (nm)")
+        # Add colorbar with white text
+        cbar = fig.colorbar(scatter, ax=ax, label="nm/pixel")
+        cbar.set_label("nm/pixel", color="white")
+        cbar.ax.yaxis.set_tick_params(color="white")
+        cbar.outline.set_edgecolor("white")
+        plt.setp(plt.getp(cbar.ax.axes, "yticklabels"), color="white")
 
         st.pyplot(fig)
 
@@ -318,6 +350,9 @@ with tab1:
 # ============================================================================
 with tab2:
     st.header("Sampling Sweep Analysis")
+    st.markdown(
+        r"**Spectral sampling:** $\frac{\Delta\lambda}{\Delta x} = \frac{pd\cos^3\beta}{mf}$"
+    )
 
     # Create columns for layout
     col1, col2 = st.columns([2, 1])
@@ -382,22 +417,6 @@ with tab2:
 
         st.subheader("Plot Options")
 
-        plot_type = st.selectbox(
-            "Y variable",
-            ["nm per pixel", "Δλ for N pixels"],
-            index=0,
-            key="plot_type",
-        )
-
-        n_pixels = st.number_input(
-            "N pixels",
-            min_value=1,
-            max_value=100,
-            value=2,
-            step=1,
-            key="n_pixels",
-        )
-
         sweep_param = st.selectbox(
             "Sweep parameter",
             ["f (mm)", "lines/mm", "λ (nm)", "α (deg)"],
@@ -405,12 +424,41 @@ with tab2:
             key="sweep_param",
         )
 
+        # Dynamic ranges based on sweep parameter
+        if sweep_param == "f (mm)":
+            default_start, default_stop = 50.0, 1000.0
+            min_val, max_val = 1.0, 10000.0
+            step_val = 10.0
+        elif sweep_param == "lines/mm":
+            default_start, default_stop = 100.0, 3600.0
+            min_val, max_val = 50.0, 10000.0
+            step_val = 50.0
+        elif sweep_param == "λ (nm)":
+            default_start, default_stop = 450.0, 820.0
+            min_val, max_val = 100.0, 5000.0
+            step_val = 10.0
+        else:  # α (deg)
+            default_start, default_stop = 0.0, 89.0
+            min_val, max_val = 0.0, 89.9
+            step_val = 1.0
+
+        # Use dynamic keys to force widget reset when parameter changes
         sweep_start = st.number_input(
-            "Sweep start", value=50.0, step=10.0, key="sweep_start"
+            "Sweep start",
+            min_value=min_val,
+            max_value=max_val,
+            value=default_start,
+            step=step_val,
+            key=f"sweep_start_{sweep_param}",
         )
 
         sweep_stop = st.number_input(
-            "Sweep stop", value=500.0, step=10.0, key="sweep_stop"
+            "Sweep stop",
+            min_value=min_val,
+            max_value=max_val,
+            value=default_stop,
+            step=step_val,
+            key=f"sweep_stop_{sweep_param}",
         )
 
         sweep_points = st.number_input(
@@ -434,13 +482,7 @@ with tab2:
                 f=focal_length_mm_sw * 1e-3,
             )
 
-            if plot_type == "nm per pixel":
-                st.success(f"✓ Current: **{current_nm_per_pix:.4f} nm/pixel**")
-            else:
-                delta_lambda = current_nm_per_pix * n_pixels
-                st.success(
-                    f"✓ Current: **{delta_lambda:.4f} nm** for {n_pixels} pixels"
-                )
+            st.success(f"✓ Current: **{current_nm_per_pix:.4f} nm/pixel**")
 
         except ValueError as e:
             st.error(f"✗ {e}")
@@ -475,22 +517,22 @@ with tab2:
                     f=f_val,
                 )
 
-                if plot_type == "nm per pixel":
-                    y_values.append(nm_per_pix)
-                else:
-                    y_values.append(nm_per_pix * n_pixels)
+                y_values.append(nm_per_pix)
 
             except:
                 y_values.append(np.nan)
 
-        # Create figure
-        fig = Figure(figsize=(10, 6))
-        ax = fig.add_subplot(111)
+        # Create figure with dark theme
+        fig = Figure(figsize=(10, 6), facecolor="#0e1117")
+        ax = fig.add_subplot(111, facecolor="#0e1117")
+        ax.tick_params(colors="white", which="both")
+        ax.spines["bottom"].set_color("white")
+        ax.spines["top"].set_color("white")
+        ax.spines["left"].set_color("white")
+        ax.spines["right"].set_color("white")
 
         # Plot sweep
-        ax.plot(
-            sweep_values, y_values, "c-", linewidth=2, marker="o", markersize=4
-        )
+        ax.plot(sweep_values, y_values, linewidth=1, marker="o", markersize=4)
 
         # Mark current value
         try:
@@ -503,38 +545,37 @@ with tab2:
             else:  # α (deg)
                 current_x = alpha_deg_sw
 
-            if plot_type == "nm per pixel":
+            # Only show marker if current value is within the sweep range
+            if sweep_start <= current_x <= sweep_stop:
                 current_y = current_nm_per_pix
-            else:
-                current_y = current_nm_per_pix * n_pixels
 
-            ax.scatter(
-                [current_x],
-                [current_y],
-                color="red",
-                s=150,
-                marker="*",
-                edgecolors="black",
-                linewidths=1.5,
-                zorder=10,
-                label="Current configuration",
-            )
+                ax.scatter(
+                    [current_x],
+                    [current_y],
+                    color="#FFD10F",
+                    s=150,
+                    marker="*",
+                    edgecolors="#F2B705",
+                    linewidths=1.5,
+                    zorder=10,
+                    label="Current configuration",
+                )
         except:
             pass
 
-        ax.set_xlabel(f"{sweep_param}", fontsize=12, fontweight="bold")
+        ax.set_xlabel(
+            f"{sweep_param}", fontsize=12, fontweight="bold", color="white"
+        )
 
-        if plot_type == "nm per pixel":
-            ylabel = "nm/pixel"
-        else:
-            ylabel = f"Δλ for {n_pixels} pixels (nm)"
-        ax.set_ylabel(ylabel, fontsize=12, fontweight="bold")
+        ax.set_ylabel(
+            "nm/pixel", fontsize=12, fontweight="bold", color="white"
+        )
 
         title = f"Spectral Sampling vs {sweep_param}\n"
         title += f"{int(lines_per_mm_sw)} lines/mm, α={alpha_deg_sw}°, λ={wavelength_nm_sw:.0f} nm, f={focal_length_mm_sw:.0f} mm"
-        ax.set_title(title, fontsize=14, fontweight="bold")
+        ax.set_title(title, fontsize=14, fontweight="bold", color="white")
 
-        ax.grid(True, alpha=0.3, linestyle="--")
+        ax.grid(True, alpha=0.3, linestyle="--", color="gray")
         ax.legend(loc="best")
 
         st.pyplot(fig)
@@ -570,11 +611,23 @@ with tab3:
         if uploaded_file is not None:
             # Try to load and analyze the file
             try:
-                # Read the file
-                stringio = io.StringIO(
-                    uploaded_file.getvalue().decode("utf-8")
-                )
-                data = np.loadtxt(stringio)
+                # Read the file - decode with UTF-8-sig to handle BOM
+                import pandas as pd
+
+                uploaded_file.seek(0)  # Reset file pointer
+                content = uploaded_file.getvalue().decode("utf-8-sig")
+                stringio = io.StringIO(content)
+
+                # Try pandas first for better CSV handling
+                try:
+                    df = pd.read_csv(stringio, header=None)
+                    data = (
+                        df.values.flatten() if df.shape[1] == 1 else df.values
+                    )
+                except:
+                    # Fallback to numpy
+                    stringio.seek(0)
+                    data = np.loadtxt(stringio, delimiter=",")
 
                 # Calculate statistics
                 mean_val = np.mean(data)
@@ -598,9 +651,21 @@ with tab3:
 
     if uploaded_file is not None:
         try:
-            # Try to load the file
-            stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
-            data = np.loadtxt(stringio)
+            # Try to load the file - decode with UTF-8-sig to handle BOM
+            import pandas as pd
+
+            uploaded_file.seek(0)  # Reset file pointer
+            content = uploaded_file.getvalue().decode("utf-8-sig")
+            stringio = io.StringIO(content)
+
+            # Try pandas first for better CSV handling
+            try:
+                df = pd.read_csv(stringio, header=None)
+                data = df.values
+            except:
+                # Fallback to numpy
+                stringio.seek(0)
+                data = np.loadtxt(stringio, delimiter=",")
 
             # If data is 1D, create sample plots
             if data.ndim == 1:
@@ -654,8 +719,13 @@ with tab3:
 
     for i, (title, x_data, y_data) in enumerate(plot_data[:6]):
         with cols[i % 3]:
-            fig = Figure(figsize=(5, 3.5))
-            ax = fig.add_subplot(111)
+            fig = Figure(figsize=(5, 3.5), facecolor="#0e1117")
+            ax = fig.add_subplot(111, facecolor="#0e1117")
+            ax.tick_params(colors="white", which="both")
+            ax.spines["bottom"].set_color("white")
+            ax.spines["top"].set_color("white")
+            ax.spines["left"].set_color("white")
+            ax.spines["right"].set_color("white")
 
             if title == "Histogram":
                 ax.hist(
@@ -663,17 +733,17 @@ with tab3:
                     bins=30,
                     color=colors[i],
                     alpha=0.7,
-                    edgecolor="black",
+                    edgecolor="white",
                 )
-                ax.set_xlabel("Value")
-                ax.set_ylabel("Frequency")
+                ax.set_xlabel("Value", color="white")
+                ax.set_ylabel("Frequency", color="white")
             else:
                 ax.plot(x_data, y_data, color=colors[i], linewidth=2)
-                ax.set_xlabel("X")
-                ax.set_ylabel("Y")
+                ax.set_xlabel("X", color="white")
+                ax.set_ylabel("Y", color="white")
 
-            ax.set_title(title, fontsize=12, fontweight="bold")
-            ax.grid(True, alpha=0.3, linestyle="--")
+            ax.set_title(title, fontsize=12, fontweight="bold", color="white")
+            ax.grid(True, alpha=0.3, linestyle="--", color="gray")
 
             st.pyplot(fig)
 

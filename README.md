@@ -2,20 +2,26 @@
 
 **GREG** is an interactive web app for diffraction grating analysis and spectrometer design. Built with Streamlit and Python, it provides real-time calculations and visualizations for optical engineers and researchers.
 
+🌐 **Try it live**: [gregapp.streamlit.app](https://gregapp.streamlit.app/)
+
 ## 🌟 Features
 
 ### 📐 Output Angle Analysis
 - Calculate output angles (β) vs incident angles (α) for diffraction gratings
-- Visualize grating behavior with interactive scatter plots
+- Visualize grating behavior with interactive scatter plots colored by nm/pixel
+- Display grating equation: *m·λ = d(sin α + sin β)*
 - Identify Littrow configurations
 - Calculate spectral sampling (nm/pixel)
 - Support for multiple diffraction orders
+- Dark theme optimized for visualization
 
 ### 📊 Sampling Sweep
+- Display spectral sampling equation: *dλ/dx = (d·cos³β)/(mf)*
 - Sweep parameters: focal length, groove density, wavelength, incident angle
-- Analyze spectral sampling vs system parameters
+- Dynamic parameter ranges that adjust based on selected sweep parameter
+- Analyze spectral sampling (nm/pixel) vs system parameters
 - Optimize spectrometer design
-- Calculate Δλ for N pixels
+- Mark current configuration on sweep plots
 
 ### 📁 File Analysis
 - Upload and analyze data files (txt, csv, dat)
@@ -27,12 +33,12 @@
 ## 🚀 Quick Start
 
 ### Online (Recommended)
-Visit the deployed app: **[greg.streamlit.app](https://greg.streamlit.app)** *(link coming soon)*
+Visit the deployed app: **[gregapp.streamlit.app](https://gregapp.streamlit.app/)**
 
 ### Local Installation
-```powershell
+```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/greg.git
+git clone https://github.com/rngKomorebi/greg.git
 cd greg
 
 # Install dependencies
@@ -51,20 +57,24 @@ GREG is fully responsive and works on mobile devices. Simply visit the app URL f
 
 GREG uses the grating equation for reflection gratings in an in-plane mount:
 
-utf8m\lambda = d(\sin\alpha + \sin\beta)utf8
+```
+m·λ = d(sin α + sin β)
+```
 
 Where:
-- $ = diffraction order
-- $\lambda$ = wavelength
-- $ = groove spacing (1/lines_per_mm)
-- $\alpha$ = incident angle
-- $\beta$ = output angle
+- **m** = diffraction order
+- **λ** = wavelength
+- **d** = groove spacing (1/lines_per_mm)
+- **α** = incident angle
+- **β** = output angle
 
 Spectral sampling is calculated using:
 
-utf8\frac{d\lambda}{dx} = \frac{d \cos^3\beta}{mf}utf8
+```
+dλ/dx = (d·cos³β)/(m·f)
+```
 
-Where $ is the focal length and  = f\tan\beta$ is the detector position.
+Where **f** is the focal length and **x = f·tan β** is the detector position.
 
 ## 📦 Requirements
 - Python 3.8+
@@ -75,17 +85,22 @@ Where $ is the focal length and  = f\tan\beta$ is the detector position.
 ## 🛠️ Technology Stack
 - **Frontend**: Streamlit
 - **Computation**: NumPy
-- **Visualization**: Matplotlib
+- **Visualization**: Matplotlib with dark theme
 - **Physics**: Custom grating calculations (physics_core.py)
 
 ## 📄 File Structure
 ```
 greg/
-├── grating_streamlit.py   # Main Streamlit app
+├── grating_streamlit.py   # Main Streamlit app (3 tabs)
 ├── physics_core.py         # Grating physics calculations
 ├── requirements.txt        # Python dependencies
+├── example_spectrum.csv    # Sample data for testing
+├── LICENSE                 # MIT License
 └── README.md              # This file
 ```
+
+## 🔄 Deployment
+The app automatically deploys to Streamlit Cloud when changes are pushed to the main branch on GitHub. No manual deployment steps required.
 
 ## 🤝 Contributing
 Contributions are welcome! Feel free to:
@@ -100,8 +115,8 @@ MIT License - feel free to use for academic or commercial projects
 Built for diffraction grating analysis and spectrometer design
 
 ## 🔗 Links
-- **App**: [greg.streamlit.app](https://greg.streamlit.app) *(coming soon)*
-- **Repository**: [github.com/YOUR_USERNAME/greg](https://github.com/YOUR_USERNAME/greg)
+- **Live App**: [gregapp.streamlit.app](https://gregapp.streamlit.app/)
+- **Repository**: [github.com/rngKomorebi/greg](https://github.com/rngKomorebi/greg)
 
 ---
 
