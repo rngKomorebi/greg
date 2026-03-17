@@ -1,6 +1,30 @@
 """
-Streamlit-based Grating Explorer
-A simpler, web-based alternative to the Qt GUI for exploring diffraction grating properties.
+GREG - Grating Equation Generator (Streamlit Web Application)
+
+An interactive web application for diffraction grating analysis and spectrometer design.
+Built with Streamlit, this tool provides real-time calculations and visualizations for
+optical engineers and researchers working with diffraction gratings.
+
+Features:
+    - Output Angle Analysis: Calculate and visualize output angles vs incident angles,
+      identify Littrow configurations, and compute spectral sampling (nm/pixel)
+    - Sampling Sweep: Analyze how spectral sampling varies with different system
+      parameters (focal length, groove density, wavelength, incident angle)
+    - File Analysis: Upload and analyze data files with multi-plot visualization
+      and statistical analysis
+
+Usage:
+    Run with: streamlit run grating_streamlit.py
+    Access at: http://localhost:8501
+
+Dependencies:
+    - streamlit: Web application framework
+    - numpy: Numerical computations
+    - matplotlib: Plotting and visualization
+    - physics_core: Core grating physics calculations
+
+Author: rngKomorebi
+License: MIT
 """
 
 import io
