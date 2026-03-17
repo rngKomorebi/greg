@@ -1,3 +1,19 @@
+"""
+Physics Core Module for Diffraction Grating Calculations
+
+This module provides core physics calculations for diffraction grating analysis,
+including output angle calculations, spectral sampling, and resolution analysis
+for reflection gratings in an in-plane mount configuration.
+
+The grating equation used is: m·λ = d·(sin(α) + sin(β))
+where:
+    m = diffraction order
+    λ = wavelength
+    d = groove spacing (1/lines_per_mm)
+    α = incident angle
+    β = output angle
+"""
+
 import math
 
 import numpy as np
@@ -12,10 +28,31 @@ def nm_per_pixel(
     f: float = 200e-3,
 ) -> float:
     """
-    nm/pixel for a reflection grating in an in-plane mount, computed
-    from α and λ. Uses the exact mapping x = f tan β, leading to
-    dx/dλ = f m / (d cos^3 β). Raises ValueError if the chosen order
-    does not exist at the given angles/wavelength.
+    Calculate spectral sampling (nm/pixel) for a reflection grating spectrometer.
+    
+    Uses the exact mapping x = f·tan(β) for detector position, leading to the
+    dispersion relation dx/dλ = f·m / (d·cos³(β)). The spectral sampling is then
+    computed as: nm/pixel = p·d·cos³(β) / (m·f) × 10⁹
+    
+    Args:
+        p: Pixel pitch in meters (default: 26.2 µm)
+        lines_per_mm: Grating groove density in lines/mm (default: 1200.0)
+        alpha_deg: Incident angle α in degrees (default: 30.0)
+        lambda_nm: Wavelength λ in nanometers (default: 640.0)
+        m: Diffraction order, typically ±1, ±2, etc. (default: 1)
+        f: Focal length in meters (default: 200 mm)
+    
+    Returns:
+        Spectral sampling in nm/pixel
+    
+    Raises:
+        ValueError: If the chosen diffraction order does not exist for the given
+                   combination of incident angle, wavelength, and grating parameters
+                   (i.e., when |sin(β)| > 1)
+    
+    Example:
+        >>> nm_per_pixel(p=26.2e-6, lines_per_mm=1200, alpha_deg=30, lambda_nm=640)
+        0.0234
     """
     d = 1e-3 / lines_per_mm  # [m]
     alpha = math.radians(alpha_deg)  # [rad]
@@ -34,9 +71,28 @@ def output_angle(
     m: int, lambda_nm: float, lines_per_mm: int, alpha_deg: float
 ) -> float:
     """
-    Output angle β (degrees) for a reflection grating in an in-plane mount.
-    Uses m λ = d (sin α + sin β). Inputs λ in nm, lines_per_mm in lines/mm.
-    Raises ValueError if |sinβ|>1.
+    Calculate the output angle β for a reflection grating in an in-plane mount.
+    
+    Uses the grating equation: m·λ = d·(sin(α) + sin(β))
+    Solving for β: β = arcsin(m·λ/d - sin(α))
+    
+    Args:
+        m: Diffraction order (integer), typically ±1, ±2, etc.
+        lambda_nm: Wavelength λ in nanometers
+        lines_per_mm: Grating groove density in lines/mm (integer)
+        alpha_deg: Incident angle α in degrees
+    
+    Returns:
+        Output angle β in degrees
+    
+    Raises:
+        ValueError: If no physical solution exists (i.e., |sin(β)| > 1),
+                   which occurs when the requested order cannot propagate
+                   at the given wavelength and incident angle
+    
+    Example:
+        >>> output_angle(m=1, lambda_nm=640, lines_per_mm=1200, alpha_deg=30)
+        45.2
     """
     d = 1e-3 / lines_per_mm  # [m]
     lam = lambda_nm * 1e-9  # [m]
@@ -49,7 +105,29 @@ def output_angle(
 
 def littrow_config(m: int, lambda_nm: float, lines_per_mm: int) -> float:
     """
-    Littrow incidence angle α_L (degrees) where β=α. Condition: m λ = 2 d sin α_L.
+    Calculate the Littrow incidence angle where the output angle equals the incident angle.
+    
+    In Littrow configuration, β = α, which simplifies the grating equation to:
+    m·λ = 2·d·sin(α_L)
+    
+    This configuration is useful for spectrometer designs as it provides retro-reflection,
+    minimizing optical aberrations and simplifying alignment.
+    
+    Args:
+        m: Diffraction order (integer), typically ±1, ±2, etc.
+        lambda_nm: Wavelength λ in nanometers
+        lines_per_mm: Grating groove density in lines/mm (integer)
+    
+    Returns:
+        Littrow incidence angle α_L in degrees
+    
+    Raises:
+        ValueError: If no physical Littrow angle exists for the given parameters
+                   (i.e., when m·λ/(2·d) > 1 or < -1)
+    
+    Example:
+        >>> littrow_config(m=1, lambda_nm=640, lines_per_mm=1200)
+        23.5
     """
     d = 1e-3 / lines_per_mm  # [m]
     lam = lambda_nm * 1e-9  # [m]
@@ -123,23 +201,31 @@ def detector_limited_resolution_rms(
     f: float = 200e-3,
 ) -> float:
     """
-    Detector sampling limited resolution σ (RMS) in nm.
-
-    For Nyquist sampling, the pixel size contributes to the PSF.
-    If we approximate the pixel as a top-hat function of width p_λ (in nm),
-    then convolving with a Gaussian gives:
-
-    σ_pixel ≈ p_λ / √12  (RMS of uniform distribution)
-
-    where p_λ = nm/pixel is the spectral sampling.
-
-    However, in practice with Gaussian fitting, you typically observe:
-    σ_measured ≈ nm/pixel when the line is barely sampled (2-3 pixels).
-
-    This uses the pragmatic estimate: σ_detector ≈ nm_per_pixel
-
+    Calculate the detector sampling limited spectral resolution σ (RMS) in nanometers.
+    
+    For Nyquist sampling, the pixel size contributes to the point spread function (PSF).
+    If we approximate the pixel as a top-hat function of width p_λ (in nm), then
+    convolving with a Gaussian gives σ_pixel ≈ p_λ / √12 (RMS of uniform distribution).
+    
+    However, in practice with Gaussian fitting, you typically observe σ_measured ≈ nm/pixel
+    when the line is barely sampled (2-3 pixels). This function uses the pragmatic estimate:
+    σ_detector ≈ nm_per_pixel
+    
+    Args:
+        p: Pixel pitch in meters (default: 26.2 µm)
+        lines_per_mm: Grating groove density in lines/mm (default: 1200.0)
+        alpha_deg: Incident angle α in degrees (default: 30.0)
+        lambda_nm: Wavelength λ in nanometers (default: 640.0)
+        m: Diffraction order (default: 1)
+        f: Focal length in meters (default: 200 mm)
+    
     Returns:
-        σ in nm (approximate RMS width from detector sampling)
+        Detector-limited spectral resolution σ in nm (approximate RMS width)
+    
+    Note:
+        For a more conservative estimate, use σ = nm_per_pixel / √12 ≈ 0.29 × nm_per_pixel
+        for top-hat pixel response. The current implementation uses nm_per_pixel directly
+        as it better reflects typical experimental conditions.
     """
     nmpp = nm_per_pixel(p, lines_per_mm, alpha_deg, lambda_nm, m, f)
     # Pragmatic: σ ≈ pixel_size for marginally sampled lines
@@ -157,18 +243,42 @@ def effective_resolution_rms(
     illuminated_width_mm: float = 25.0,
 ) -> dict:
     """
-    Calculate the effective spectral resolution σ (RMS), considering both
-    grating diffraction limit and detector sampling.
-
-    When both contribute, they add in quadrature:
+    Calculate the effective spectral resolution considering both grating and detector limits.
+    
+    The total spectral resolution is determined by two independent contributions:
+    1. Grating diffraction limit (depends on the number of illuminated grooves)
+    2. Detector sampling limit (depends on pixel size and dispersion)
+    
+    When both contribute, they add in quadrature (as independent Gaussian contributions):
     σ_total = √(σ_grating² + σ_detector²)
-
-    Returns dict with:
-        - 'grating_limited_rms': diffraction-limited σ (nm)
-        - 'detector_limited_rms': sampling-limited σ (nm)
-        - 'effective_rms': total σ (nm) - quadrature sum
-        - 'resolving_power': R = λ/(2.355·σ) (using FWHM definition)
-        - 'limiting_factor': 'grating', 'detector', or 'both'
+    
+    Args:
+        p: Pixel pitch in meters (default: 26.2 µm)
+        lines_per_mm: Grating groove density in lines/mm (default: 1200.0)
+        alpha_deg: Incident angle α in degrees (default: 30.0)
+        lambda_nm: Wavelength λ in nanometers (default: 640.0)
+        m: Diffraction order (default: 1)
+        f: Focal length in meters (default: 200 mm)
+        illuminated_width_mm: Width of the beam on the grating in mm (default: 25.0)
+    
+    Returns:
+        Dictionary containing:
+            - 'grating_limited_rms': Diffraction-limited σ in nm
+            - 'detector_limited_rms': Sampling-limited σ in nm
+            - 'effective_rms': Total σ in nm (quadrature sum)
+            - 'resolving_power': Effective resolving power R = λ/(2.355·σ)
+            - 'limiting_factor': 'grating', 'detector', or 'both'
+    
+    Note:
+        The limiting factor is determined by comparing the two contributions:
+        - If σ_grating > 2·σ_detector, result is 'grating'
+        - If σ_detector > 2·σ_grating, result is 'detector'
+        - Otherwise, result is 'both'
+    
+    Example:
+        >>> result = effective_resolution_rms(lambda_nm=640, lines_per_mm=1200)
+        >>> print(f"Effective resolution: {result['effective_rms']:.3f} nm")
+        >>> print(f"Limited by: {result['limiting_factor']}")
     """
     sigma_grating = spectral_resolution_rms(
         lambda_nm, lines_per_mm, illuminated_width_mm, m
