@@ -143,16 +143,29 @@ def grating_resolving_power(
     m: int = 1,
 ) -> float:
     """
-    Theoretical resolving power R = λ/Δλ = m·N where N is the total
-    number of illuminated grooves on the grating.
-
+    Calculate the theoretical resolving power of a diffraction grating.
+    
+    The resolving power R = λ/Δλ represents the ability of the grating to separate
+    closely spaced spectral lines. It is given by R = m·N, where N is the total
+    number of illuminated grooves on the grating surface.
+    
     Args:
-        lines_per_mm: groove density
-        illuminated_width_mm: width of the beam on the grating
-        m: diffraction order
-
+        lines_per_mm: Grating groove density in lines/mm (default: 1200.0)
+        illuminated_width_mm: Width of the beam on the grating in mm (default: 25.0)
+        m: Diffraction order (default: 1). Note: The absolute value is used in the
+           calculation, so positive and negative orders give the same resolving power
+    
     Returns:
-        Resolving power R (dimensionless)
+        Resolving power R (dimensionless). Higher values indicate better spectral
+        resolution capability
+    
+    Example:
+        >>> grating_resolving_power(lines_per_mm=1200, illuminated_width_mm=25, m=1)
+        30000.0
+        
+    Note:
+        This is the theoretical maximum resolving power. Actual performance may be
+        limited by detector sampling, slit width, aberrations, or other factors.
     """
     N = lines_per_mm * illuminated_width_mm  # total illuminated grooves
     return abs(m) * N
@@ -165,27 +178,37 @@ def spectral_resolution_rms(
     m: int = 1,
 ) -> float:
     """
-    Theoretical spectral resolution σ (RMS, Gaussian sigma) in nm,
-    limited by the grating resolving power.
-
-    For a diffraction-limited Gaussian line profile:
-    σ = λ / (R × 2.355) = λ / (m·N × 2.355)
-
-    where FWHM = 2.355 × σ for a Gaussian.
-
-    R = λ/FWHM, so σ = λ/(R × 2.355)
-
-    This is the diffraction-limited resolution (RMS). Actual resolution
-    may be worse due to slit width, aberrations, pixel sampling, etc.
-
+    Calculate the theoretical spectral resolution limited by grating resolving power.
+    
+    For a diffraction-limited Gaussian line profile, the relationship between resolving
+    power R and spectral width is:
+        R = λ/FWHM
+    
+    For a Gaussian profile, FWHM = 2.355·σ, so:
+        σ = λ / (R × 2.355) = λ / (m·N × 2.355)
+    
+    This represents the narrowest achievable line width (RMS) due to diffraction alone.
+    Actual resolution may be worse due to detector sampling, slit width, optical
+    aberrations, or environmental factors.
+    
     Args:
-        lambda_nm: wavelength in nm
-        lines_per_mm: groove density
-        illuminated_width_mm: beam width on grating
-        m: diffraction order
-
+        lambda_nm: Wavelength λ in nanometers (default: 640.0)
+        lines_per_mm: Grating groove density in lines/mm (default: 1200.0)
+        illuminated_width_mm: Width of the beam on the grating in mm (default: 25.0)
+        m: Diffraction order (default: 1)
+    
     Returns:
-        σ in nm (Gaussian RMS width)
+        Spectral resolution σ in nm (Gaussian RMS width). Smaller values indicate
+        better resolution
+    
+    Example:
+        >>> spectral_resolution_rms(lambda_nm=640, lines_per_mm=1200,
+        ...                         illuminated_width_mm=25, m=1)
+        0.0091
+    
+    Note:
+        This function calculates the diffraction-limited resolution. For the total
+        system resolution including detector effects, use effective_resolution_rms().
     """
     R = grating_resolving_power(lines_per_mm, illuminated_width_mm, m)
     # R = λ/FWHM, and FWHM = 2.355·σ, so σ = λ/(R × 2.355)
