@@ -117,7 +117,7 @@ with tab1:
         wavelength_nm = st.number_input(
             "Wavelength λ (nm)",
             min_value=450.0,
-            max_value=820.0,
+            max_value=1000.0,
             value=650.0,
             step=1.0,
             key="wavelength_oa",
@@ -391,7 +391,7 @@ with tab2:
         wavelength_nm_sw = st.number_input(
             "Wavelength λ (nm)",
             min_value=450.0,
-            max_value=820.0,
+            max_value=1000.0,
             value=650.0,
             step=1.0,
             key="wavelength_sw",
@@ -434,7 +434,7 @@ with tab2:
             min_val, max_val = 50.0, 10000.0
             step_val = 50.0
         elif sweep_param == "λ (nm)":
-            default_start, default_stop = 450.0, 820.0
+            default_start, default_stop = 450.0, 1000.0
             min_val, max_val = 100.0, 5000.0
             step_val = 10.0
         else:  # α (deg)
