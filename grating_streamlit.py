@@ -34,6 +34,7 @@ import numpy as np
 import streamlit as st
 from matplotlib.figure import Figure
 
+import analysis_core as ac
 import physics_core as pc
 
 # Page configuration
@@ -189,7 +190,7 @@ with st.sidebar:
 
     page = st.radio(
         "",
-        ["Output Angle", "Sampling Sweep", "File Analysis"],
+        ["Output Angle", "Sampling Sweep", "Spectrometer Analysis"],
         label_visibility="collapsed",
     )
 
@@ -386,19 +387,155 @@ with st.sidebar:
             key="sweep_points",
         )
 
-    # File Analysis params
+    # Spectrometer Analysis params
     else:
         st.subheader("Data File")
         uploaded_file = st.file_uploader(
             "Choose a data file",
             type=["pkl", "pickle"],
-            help="Upload a pickle (.pkl) file containing the spectrum data",
+            help="Upload a pickled matplotlib sensor-population figure (.pkl)",
         )
         if uploaded_file is not None:
             st.success(f"Loaded: **{uploaded_file.name}**")
-            st.caption(f"{uploaded_file.size} bytes")
+            st.caption(f"{uploaded_file.size:,} bytes")
+            # Auto-extract peak pixels from the pickled figure's legend
+            _pkl_id = f"{uploaded_file.name}_{uploaded_file.size}"
+            if st.session_state.get("_fa_pkl_id") != _pkl_id:
+                try:
+                    _px_from_legend = ac.extract_pixels_from_legend(
+                        uploaded_file
+                    )
+                    st.session_state["_fa_extracted_pixels"] = _px_from_legend
+                except Exception:
+                    st.session_state["_fa_extracted_pixels"] = []
+                # Render raw pickle to PNG for reference display
+                try:
+                    _raw_fig = ac._load_pickle_fig(uploaded_file)
+                    _raw_fig.set_size_inches(16, 10)
+                    for _ax in _raw_fig.axes:
+                        _ax.set_facecolor(PLOT_BG)
+                        _ax.tick_params(colors=PLOT_AXIS, which="both")
+                        for _sp in _ax.spines.values():
+                            _sp.set_color(PLOT_AXIS)
+                        _ax.xaxis.label.set_color(PLOT_AXIS)
+                        _ax.yaxis.label.set_color(PLOT_AXIS)
+                        _ax.title.set_color(PLOT_AXIS)
+                        _leg = _ax.get_legend()
+                        if _leg:
+                            _leg.get_frame().set_facecolor(PLOT_BG)
+                            for _lt in _leg.get_texts():
+                                _lt.set_color(PLOT_AXIS)
+                    _raw_fig.set_facecolor(PLOT_BG)
+                    _raw_fig.tight_layout()
+                    _raw_buf = io.BytesIO()
+                    _raw_fig.savefig(
+                        _raw_buf, format="png", dpi=110, bbox_inches="tight"
+                    )
+                    _raw_buf.seek(0)
+                    st.session_state["fa_raw_pkl_png"] = _raw_buf.getvalue()
+                    plt.close(_raw_fig)
+                except Exception:
+                    st.session_state.pop("fa_raw_pkl_png", None)
+                st.session_state["_fa_pkl_id"] = _pkl_id
         else:
             st.info("No file uploaded yet")
+
+        _auto_pixels = st.session_state.get("_fa_extracted_pixels", [])
+        if _auto_pixels:
+            st.caption(
+                "Detected peaks (from legend): "
+                + ", ".join(
+                    str(int(p)) if p == int(p) else str(p)
+                    for p in _auto_pixels
+                )
+            )
+
+        st.markdown(
+            f"""
+            <style>
+            div[data-testid="stSidebarContent"] div[data-testid="stButton"] > button {{
+                display: block;
+                margin: 0.4rem auto 0.2rem auto;
+                font-size: 1.15rem;
+                font-weight: 700;
+                border: 2px solid {ACCENT};
+                padding: 0.45rem 2rem;
+                width: 80%;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        run_analysis_btn = st.button(
+            "Run Analysis",
+            key="run_analysis_fa",
+            disabled=uploaded_file is None,
+            use_container_width=True,
+        )
+
+        st.subheader("Analysis Parameters")
+        ref_wavelengths_str = st.text_input(
+            "Reference wavelengths (nm)",
+            value="638.299, 640.225",
+            help="Two Neon wavelengths whose pixel positions you know with certainty",
+            key="ref_wavelengths_str",
+        )
+        ref_pixels_str = st.text_input(
+            "Reference pixels",
+            value="16, 33",
+            help="Pixel positions matching the reference wavelengths above (same order)",
+            key="ref_pixels_str",
+        )
+        tolerance_px_fa = st.number_input(
+            "Matching tolerance (px)",
+            min_value=0.5,
+            max_value=50.0,
+            value=5.0,
+            step=0.5,
+            key="tolerance_px_fa",
+        )
+        full_sensor_fa = st.checkbox(
+            "Full sensor (512 px, else 256 px)",
+            value=False,
+            key="full_sensor_fa",
+        )
+
+        # Parse inputs and validate
+        _dp_valid = _rw_valid = _rp_valid = True
+        _detected_pixels = _auto_pixels
+        if len(_detected_pixels) < 2:
+            _dp_valid = False
+        try:
+            _ref_wavelengths = [
+                float(x.strip())
+                for x in ref_wavelengths_str.split(",")
+                if x.strip()
+            ]
+            if len(_ref_wavelengths) != 2:
+                _rw_valid = False
+        except ValueError:
+            _rw_valid = False
+        try:
+            _ref_pixels = [
+                float(x.strip())
+                for x in ref_pixels_str.split(",")
+                if x.strip()
+            ]
+            if len(_ref_pixels) != 2:
+                _rp_valid = False
+        except ValueError:
+            _rp_valid = False
+
+        if not _dp_valid:
+            st.caption(
+                "\u26a0 Could not read \u22652 peak pixels from the figure legend"
+            )
+        if not _rw_valid:
+            st.caption(
+                "\u26a0 Reference wavelengths: exactly 2 values required"
+            )
+        if not _rp_valid:
+            st.caption("\u26a0 Reference pixels: exactly 2 values required")
 
 
 # ============================================================================
@@ -474,92 +611,93 @@ if page == "Output Angle":
             betas.append(np.nan)
             nm_per_pixel_values.append(np.nan)
 
-    fig = Figure(figsize=(10, 4.5), facecolor=PLOT_BG)
-    ax = fig.add_subplot(111, facecolor=PLOT_SURFACE)
-    ax.tick_params(colors=PLOT_AXIS, which="both", labelsize=10)
-    for spine in ax.spines.values():
-        spine.set_color("white")
+    with plt.rc_context({"font.size": 10}):
+        fig = Figure(figsize=(10, 4.5), facecolor=PLOT_BG)
+        ax = fig.add_subplot(111, facecolor=PLOT_SURFACE)
+        ax.tick_params(colors=PLOT_AXIS, which="both", labelsize=10)
+        for spine in ax.spines.values():
+            spine.set_color("white")
 
-    scatter = ax.scatter(
-        alphas,
-        betas,
-        c=nm_per_pixel_values,
-        cmap=colormap,
-        s=marker_size,
-        alpha=0.8,
-        edgecolors="black",
-        linewidths=0.5,
-    )
-
-    if beta_current is not None:
-        ax.scatter(
-            [alpha_deg],
-            [beta_current],
-            color="#FFD10F",
-            s=marker_size * 3,
-            marker="*",
-            edgecolors="#F2B705",
-            linewidths=1.5,
-            zorder=10,
-            label=f"Current: α={alpha_deg}°, β={beta_current:.2f}°",
+        scatter = ax.scatter(
+            alphas,
+            betas,
+            c=nm_per_pixel_values,
+            cmap=colormap,
+            s=marker_size,
+            alpha=0.8,
+            edgecolors="black",
+            linewidths=0.5,
         )
 
-    if show_littrow:
-        try:
-            alpha_littrow = pc.littrow_config(
-                order_m, wavelength_nm, int(lines_per_mm)
+        if beta_current is not None:
+            ax.scatter(
+                [alpha_deg],
+                [beta_current],
+                color="#FFD10F",
+                s=marker_size * 3,
+                marker="*",
+                edgecolors="#F2B705",
+                linewidths=1.5,
+                zorder=10,
+                label=f"Current: α={alpha_deg}°, β={beta_current:.2f}°",
             )
-            if alpha_min <= alpha_littrow <= alpha_max:
-                ax.axvline(
-                    alpha_littrow,
-                    color="orange",
-                    linestyle="--",
-                    linewidth=1.5,
-                    alpha=0.7,
-                )
-                ax.axhline(
-                    alpha_littrow,
-                    color="orange",
-                    linestyle="--",
-                    linewidth=1.5,
-                    alpha=0.7,
-                )
-                ax.text(
-                    alpha_littrow,
-                    ax.get_ylim()[1] * 0.95,
-                    f"Littrow\nα={alpha_littrow:.1f}°",
-                    ha="center",
-                    va="top",
-                    color="#111111",
-                    fontweight="bold",
-                    bbox=dict(
-                        boxstyle="round,pad=0.5",
-                        facecolor="orange",
-                        alpha=0.85,
-                    ),
-                )
-        except:
-            pass
 
-    ax.set_xlabel("Incident Angle α (°)", fontsize=11, color=PLOT_AXIS)
-    ax.set_ylabel("Output Angle β (°)", fontsize=11, color=PLOT_AXIS)
-    ax.set_title(
-        f"Output Angle vs Incident Angle  ·  {int(lines_per_mm)} lines/mm"
-        f"  ·  λ={wavelength_nm:.0f} nm  ·  m={order_m}",
-        fontsize=12,
-        fontweight="bold",
-        color=PLOT_AXIS,
-    )
-    ax.grid(True, alpha=0.3, linestyle="--", color=PLOT_GRID)
-    ax.legend(loc="best", fontsize=9)
+        if show_littrow:
+            try:
+                alpha_littrow = pc.littrow_config(
+                    order_m, wavelength_nm, int(lines_per_mm)
+                )
+                if alpha_min <= alpha_littrow <= alpha_max:
+                    ax.axvline(
+                        alpha_littrow,
+                        color="orange",
+                        linestyle="--",
+                        linewidth=1.5,
+                        alpha=0.7,
+                    )
+                    ax.axhline(
+                        alpha_littrow,
+                        color="orange",
+                        linestyle="--",
+                        linewidth=1.5,
+                        alpha=0.7,
+                    )
+                    ax.text(
+                        alpha_littrow,
+                        ax.get_ylim()[1] * 0.95,
+                        f"Littrow\nα={alpha_littrow:.1f}°",
+                        ha="center",
+                        va="top",
+                        fontsize=10,
+                        color="#111111",
+                        fontweight="bold",
+                        bbox=dict(
+                            boxstyle="round,pad=0.5",
+                            facecolor="orange",
+                            alpha=0.85,
+                        ),
+                    )
+            except:
+                pass
 
-    cbar = fig.colorbar(scatter, ax=ax)
-    cbar.set_label("nm/pixel", color=PLOT_AXIS)
-    cbar.ax.yaxis.set_tick_params(color=PLOT_AXIS)
-    cbar.outline.set_edgecolor(PLOT_AXIS)
-    plt.setp(plt.getp(cbar.ax.axes, "yticklabels"), color=PLOT_AXIS)
+        ax.set_xlabel("Incident Angle α (°)", fontsize=11, color=PLOT_AXIS)
+        ax.set_ylabel("Output Angle β (°)", fontsize=11, color=PLOT_AXIS)
+        ax.set_title(
+            f"Output Angle vs Incident Angle  ·  {int(lines_per_mm)} lines/mm"
+            f"  ·  λ={wavelength_nm:.0f} nm  ·  m={order_m}",
+            fontsize=12,
+            fontweight="bold",
+            color=PLOT_AXIS,
+        )
+        ax.grid(True, alpha=0.3, linestyle="--", color=PLOT_GRID)
+        ax.legend(loc="best", fontsize=9)
 
-    st.pyplot(fig, use_container_width=True)
+        cbar = fig.colorbar(scatter, ax=ax)
+        cbar.set_label("nm/pixel", color=PLOT_AXIS, fontsize=10)
+        cbar.ax.tick_params(labelsize=9, colors=PLOT_AXIS)
+        cbar.outline.set_edgecolor(PLOT_AXIS)
+
+        st.pyplot(fig, use_container_width=True)
 
 
 # ============================================================================
@@ -634,57 +772,58 @@ elif page == "Sampling Sweep":
         except:
             y_values.append(np.nan)
 
-    fig = Figure(figsize=(10, 4.5), facecolor=PLOT_BG)
-    ax = fig.add_subplot(111, facecolor=PLOT_SURFACE)
-    ax.tick_params(colors=PLOT_AXIS, which="both", labelsize=10)
-    for spine in ax.spines.values():
-        spine.set_color("white")
+    with plt.rc_context({"font.size": 10}):
+        fig = Figure(figsize=(10, 4.5), facecolor=PLOT_BG)
+        ax = fig.add_subplot(111, facecolor=PLOT_SURFACE)
+        ax.tick_params(colors=PLOT_AXIS, which="both", labelsize=10)
+        for spine in ax.spines.values():
+            spine.set_color("white")
 
-    ax.plot(sweep_values, y_values, linewidth=1, marker="o", markersize=4)
+        ax.plot(sweep_values, y_values, linewidth=1, marker="o", markersize=4)
 
-    try:
-        if current_nm_per_pix is not None:
-            if sweep_param == "f (mm)":
-                current_x = focal_length_mm_sw
-            elif sweep_param == "lines/mm":
-                current_x = lines_per_mm_sw
-            elif sweep_param == "λ (nm)":
-                current_x = wavelength_nm_sw
-            else:
-                current_x = alpha_deg_sw
+        try:
+            if current_nm_per_pix is not None:
+                if sweep_param == "f (mm)":
+                    current_x = focal_length_mm_sw
+                elif sweep_param == "lines/mm":
+                    current_x = lines_per_mm_sw
+                elif sweep_param == "λ (nm)":
+                    current_x = wavelength_nm_sw
+                else:
+                    current_x = alpha_deg_sw
 
-            if sweep_start <= current_x <= sweep_stop:
-                ax.scatter(
-                    [current_x],
-                    [current_nm_per_pix],
-                    color="#FFD10F",
-                    s=150,
-                    marker="*",
-                    edgecolors="#F2B705",
-                    linewidths=1.5,
-                    zorder=10,
-                    label="Current configuration",
-                )
-    except:
-        pass
+                if sweep_start <= current_x <= sweep_stop:
+                    ax.scatter(
+                        [current_x],
+                        [current_nm_per_pix],
+                        color="#FFD10F",
+                        s=150,
+                        marker="*",
+                        edgecolors="#F2B705",
+                        linewidths=1.5,
+                        zorder=10,
+                        label="Current configuration",
+                    )
+        except:
+            pass
 
-    ax.set_xlabel(sweep_param, fontsize=11, color=PLOT_AXIS)
-    ax.set_ylabel("nm/pixel", fontsize=11, color=PLOT_AXIS)
-    ax.set_title(
-        f"Spectral Sampling vs {sweep_param}  ·  {int(lines_per_mm_sw)} lines/mm"
-        f"  ·  α={alpha_deg_sw}°  ·  λ={wavelength_nm_sw:.0f} nm  ·  f={focal_length_mm_sw:.0f} mm",
-        fontsize=12,
-        fontweight="bold",
-        color=PLOT_AXIS,
-    )
-    ax.grid(True, alpha=0.3, linestyle="--", color=PLOT_GRID)
-    ax.legend(loc="best", fontsize=9)
+        ax.set_xlabel(sweep_param, fontsize=11, color=PLOT_AXIS)
+        ax.set_ylabel("nm/pixel", fontsize=11, color=PLOT_AXIS)
+        ax.set_title(
+            f"Spectral Sampling vs {sweep_param}  ·  {int(lines_per_mm_sw)} lines/mm"
+            f"  ·  α={alpha_deg_sw}°  ·  λ={wavelength_nm_sw:.0f} nm  ·  f={focal_length_mm_sw:.0f} mm",
+            fontsize=12,
+            fontweight="bold",
+            color=PLOT_AXIS,
+        )
+        ax.grid(True, alpha=0.3, linestyle="--", color=PLOT_GRID)
+        ax.legend(loc="best", fontsize=9)
 
-    st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig, use_container_width=True)
 
 
 # ============================================================================
-# PAGE 3: FILE ANALYSIS
+# PAGE 3: SPECTROMETER ANALYSIS
 # ============================================================================
 else:
     st.markdown(
@@ -692,136 +831,184 @@ else:
         <div style="margin-bottom: 1.75rem;">
             <h1 style="font-size: 2.25rem; font-weight: 900; color: {TEXT};
                        letter-spacing: -0.03em; margin-bottom: 0;">
-                File Analysis
+                Spectrometer Analysis
             </h1>
             <div style="display: flex; align-items: center; gap: 0.75rem; margin-top: 0.6rem;">
                 <span style="height: 1px; width: 2.5rem; background: {ACCENT};
                              display: inline-block;"></span>
                 <span style="font-size: 0.65rem; color: {TEXT_MUTED};
                              letter-spacing: 0.2em; text-transform: uppercase;
-                             font-weight: 700;">multi-plot data visualization</span>
+                             font-weight: 700;">spectral sampling, linearity and stability, resolution</span>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    if uploaded_file is not None:
-        try:
-            import pandas as pd
-
-            uploaded_file.seek(0)
-            content = uploaded_file.getvalue().decode("utf-8-sig")
-            stringio = io.StringIO(content)
-            try:
-                df = pd.read_csv(stringio, header=None)
-                data_stats = (
-                    df.values.flatten() if df.shape[1] == 1 else df.values
-                )
-            except:
-                stringio.seek(0)
-                data_stats = np.loadtxt(stringio, delimiter=",")
-            sc1, sc2 = st.columns(2)
-            with sc1:
-                st.metric("Mean Value", f"{np.mean(data_stats):.3f}")
-            with sc2:
-                st.metric("Std Deviation", f"{np.std(data_stats):.3f}")
-        except Exception as e:
-            st.error(f"Error reading file: {e}")
-
-    if uploaded_file is not None:
-        try:
-            import pandas as pd
-
-            uploaded_file.seek(0)
-            content = uploaded_file.getvalue().decode("utf-8-sig")
-            stringio = io.StringIO(content)
-            try:
-                df = pd.read_csv(stringio, header=None)
-                data = df.values
-            except:
-                stringio.seek(0)
-                data = np.loadtxt(stringio, delimiter=",")
-
-            if data.ndim == 1:
-                x = np.arange(len(data))
-                plot_data = [
-                    ("Raw Data", x, data),
-                    ("Cumulative Sum", x, np.cumsum(data)),
-                    (
-                        "Moving Average",
-                        x[49:],
-                        np.convolve(data, np.ones(50) / 50, mode="valid"),
-                    ),
-                    ("Histogram", None, data),
-                    ("Normalized", x, (data - np.mean(data)) / np.std(data)),
-                    ("Derivative", x[:-1], np.diff(data)),
-                ]
-            else:
-                plot_data = [
-                    (f"Column {i+1}", np.arange(len(data)), data[:, i])
-                    for i in range(min(6, data.shape[1]))
-                ]
-        except:
-            x = np.linspace(0, 100, 200)
-            plot_data = [
-                ("Sine Wave", x, np.sin(x * 0.1)),
-                ("Cosine Wave", x, np.cos(x * 0.1)),
-                ("Random Walk", x, np.cumsum(np.random.randn(len(x))) * 0.1),
-                ("Exponential", x, np.exp(-x / 50)),
-                ("Gaussian", x, np.exp(-((x - 50) ** 2) / 200)),
-                ("Linear", x, 0.5 * x + np.random.randn(len(x)) * 5),
-            ]
-    else:
-        x = np.linspace(0, 100, 200)
-        plot_data = [
-            ("Sine Wave", x, np.sin(x * 0.1)),
-            ("Cosine Wave", x, np.cos(x * 0.1)),
-            ("Random Walk", x, np.cumsum(np.random.randn(len(x))) * 0.1),
-            ("Exponential", x, np.exp(-x / 50)),
-            ("Gaussian", x, np.exp(-((x - 50) ** 2) / 200)),
-            ("Linear", x, 0.5 * x + np.random.randn(len(x)) * 5),
-        ]
-
-    cols = st.columns(3)
-    plot_colors = [
-        "#1f77b4",
-        "#ff7f0e",
-        "#2ca02c",
-        "#d62728",
-        "#9467bd",
-        "#8c564b",
-    ]
-
-    for i, (title, x_data, y_data) in enumerate(plot_data[:6]):
-        with cols[i % 3]:
-            fig = Figure(figsize=(5, 3.5), facecolor=PLOT_BG)
-            ax = fig.add_subplot(111, facecolor=PLOT_SURFACE)
-            ax.tick_params(colors=PLOT_AXIS, which="both", labelsize=10)
-            for spine in ax.spines.values():
-                spine.set_color("white")
-
-            if title == "Histogram":
-                ax.hist(
-                    y_data,
-                    bins=30,
-                    color=plot_colors[i],
-                    alpha=0.7,
-                    edgecolor="white",
-                )
-                ax.set_xlabel("Value", fontsize=11, color=PLOT_AXIS)
-                ax.set_ylabel("Frequency", fontsize=11, color=PLOT_AXIS)
-            else:
-                ax.plot(x_data, y_data, color=plot_colors[i], linewidth=1.75)
-                ax.set_xlabel("X", fontsize=11, color=PLOT_AXIS)
-                ax.set_ylabel("Y", fontsize=11, color=PLOT_AXIS)
-
-            ax.set_title(
-                title, fontsize=12, fontweight="bold", color=PLOT_AXIS
+    # ── Raw pickle reference figure ──────────────────────────────────────────
+    if "fa_raw_pkl_png" in st.session_state and uploaded_file is not None:
+        st.markdown(
+            f"""
+            <div style="margin-bottom:0.25rem;">
+                <span style="font-size:0.6rem;color:{TEXT_MUTED};
+                             letter-spacing:0.15em;text-transform:uppercase;
+                             font-weight:700;">Reference</span>
+                <span style="font-size:0.95rem;font-weight:700;
+                             color:{TEXT};margin-left:0.5rem;">Uploaded Figure</span>
+            </div>
+            <div style="font-size:0.72rem;color:{TEXT_MUTED};margin-bottom:0.5rem;">
+                Use pixel positions from this plot as reference pixels in the sidebar
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        _c_left, _col_ref, _c_right = st.columns([1, 3, 1])
+        with _col_ref:
+            st.image(
+                st.session_state["fa_raw_pkl_png"], use_container_width=True
             )
-            ax.grid(True, alpha=0.3, linestyle="--", color=PLOT_GRID)
+        st.divider()
 
-            st.pyplot(fig)
+    # ── Run analysis on button click ─────────────────────────────────────────
+    if run_analysis_btn and uploaded_file is not None:
+        with st.spinner("Running spectrometer analysis\u2026"):
+            try:
+                results = ac.run_neon_analysis(
+                    pkl_file=uploaded_file,
+                    detected_pixels=_detected_pixels,
+                    ref_wavelengths_nm=_ref_wavelengths,
+                    ref_pixels=_ref_pixels,
+                    tolerance_px=tolerance_px_fa,
+                    full_sensor=full_sensor_fa,
+                )
+                # Serialise figures to PNG bytes for session persistence
+                figs_png = {}
+                for key, fig in results["figs"].items():
+                    buf = io.BytesIO()
+                    fig.savefig(
+                        buf, format="png", dpi=110, bbox_inches="tight"
+                    )
+                    buf.seek(0)
+                    figs_png[key] = buf.getvalue()
+                    plt.close(fig)
+                st.session_state["fa_figs_png"] = figs_png
+                st.session_state["fa_data"] = {
+                    "matched": results["matched"],
+                    "unmatched_pixels": results["unmatched_pixels"],
+                    "calibration": results["calibration"],
+                    "ideal_pixels_used": results["ideal_pixels_used"],
+                    "gauss_sigmas_px": results["gauss_fit"]["sigmas_px"],
+                    "stats": results["stats"],
+                }
+                st.session_state.pop("fa_error", None)
+            except Exception as _e:
+                st.session_state["fa_error"] = str(_e)
+                st.session_state.pop("fa_figs_png", None)
+                st.session_state.pop("fa_data", None)
+
+    # ── Display error if present ─────────────────────────────────────────────
+    if "fa_error" in st.session_state:
+        st.error(f"Analysis error: {st.session_state['fa_error']}")
+
+    # ── Display results ──────────────────────────────────────────────────────
+    if "fa_figs_png" in st.session_state and "fa_data" in st.session_state:
+        figs_png = st.session_state["fa_figs_png"]
+        data = st.session_state["fa_data"]
+        stats = data["stats"]
+        cal = data["calibration"]
+        matched = data["matched"]
+
+        # Summary metrics
+        mc1, mc2 = st.columns(2)
+        with mc1:
+            st.metric("Matched peaks", len(matched))
+        with mc2:
+            st.metric("Unmatched peaks", len(data["unmatched_pixels"]))
+
+        st.divider()
+
+        # Matched peak table
+        st.markdown(
+            f"<span style='font-size:0.75rem;letter-spacing:0.12em;"
+            f"text-transform:uppercase;font-weight:700;color:{TEXT_MUTED};'>"
+            f"Matched peaks</span>",
+            unsafe_allow_html=True,
+        )
+        rows = []
+        for px, info in sorted(matched.items()):
+            rows.append(
+                {
+                    "Pixel": f"{px:.1f}",
+                    "Wavelength (nm)": f"{info['wavelength_nm']:.4f}",
+                    "Predicted pixel": f"{info['pred_pixel']:.2f}",
+                    "Residual (px)": f"{info['delta_px']:+.2f}",
+                    "Intensity": f"{info['intensity']:.0f}",
+                }
+            )
+        st.table(rows)
+
+        # Six plots in a 2-column grid
+        _plot_meta = [
+            (
+                "A",
+                "Scale between neighbors",
+                "nm/px scale overlaid on sensor population data",
+            ),
+            (
+                "B",
+                "Scale for all combinations",
+                "nm/px for every peak pair, coloured by first peak",
+            ),
+            (
+                "C",
+                "Scale vs Distance",
+                "nm/px as a function of distance between peaks",
+            ),
+            (
+                "D",
+                "Ideal Spectrum Overlay",
+                "Measured spectrum vs NIST values",
+            ),
+            (
+                "E",
+                "Linearity",
+                "Spectrometer stability",
+            ),
+            (
+                "F",
+                "Gaussian Fit",
+                "Gaussian fit of the measured spectral lines",
+            ),
+        ]
+        col_left, col_right = st.columns(2)
+        for idx, (key, title, caption) in enumerate(_plot_meta):
+            col = col_left if idx % 2 == 0 else col_right
+            with col:
+                st.markdown(
+                    f"""
+                    <div style="margin-bottom:0.25rem;">
+                        <span style="font-size:0.6rem;color:{TEXT_MUTED};
+                                     letter-spacing:0.15em;text-transform:uppercase;
+                                     font-weight:700;">Plot {key}</span>
+                        <span style="font-size:0.95rem;font-weight:700;
+                                     color:{TEXT};margin-left:0.5rem;">{title}</span>
+                    </div>
+                    <div style="font-size:0.72rem;color:{TEXT_MUTED};
+                                margin-bottom:0.5rem;">{caption}</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.image(figs_png[key], use_container_width=True)
+
+    elif uploaded_file is None:
+        st.info(
+            "Upload a pickled sensor-population figure (.pkl) in the sidebar, "
+            "then fill in the analysis parameters and click **Run Analysis**."
+        )
+    else:
+        st.info(
+            "Set the analysis parameters in the sidebar and click **Run Analysis**."
+        )
 
 
 # ============================================================================
