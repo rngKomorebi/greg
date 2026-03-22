@@ -172,6 +172,19 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ── Safe defaults for sidebar variables ────────────────────────────────────────
+uploaded_file = None
+run_analysis_btn = False
+_detected_pixels = []
+_ref_wavelengths = []
+_ref_pixels = []
+tolerance_px_fa = 5.0
+full_sensor_fa = False
+sweep_param = "f (mm)"
+sweep_start = 50.0
+sweep_stop = 1000.0
+sweep_points = 50
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(

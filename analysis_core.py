@@ -39,6 +39,7 @@ import re
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -654,7 +655,7 @@ def plot_allpair_scales(
     )
     n_groups = len(np.asarray(peak_pixels)) - 1
     colors = [
-        plt.get_cmap("cool")(k)
+        matplotlib.colormaps["cool"](k)
         for k in np.linspace(0.1, 0.9, max(n_groups, 1))
     ]
 
