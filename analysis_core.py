@@ -34,9 +34,11 @@ Figures are never shown (no plt.show()) and global rcParams are never mutated.
 
 from __future__ import annotations
 
+import json
 import pickle
 import re
 from itertools import combinations
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
@@ -54,32 +56,19 @@ _C_YELLOW = "#FFD10F"
 _C_ORANGE = "#FF8C42"
 _C_GRID = "#3c4a43"
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Neon reference spectrum  {wavelength_nm: relative_intensity}
+# Loaded from nist_neon.json (NIST ASD, 400–900 nm, air wavelengths).
 # ─────────────────────────────────────────────────────────────────────────────
-NEON_REFERENCE_SPECTRUM: Dict[float, float] = {
-    600.0963: 1000,
-    603.000: 10000,
-    607.434: 10000,
-    614.306: 10000,
-    616.359: 10000,
-    618.215: 1500,
-    620.578: 1000,
-    626.650: 10000,
-    630.479: 1000,
-    633.443: 10000,
-    638.299: 10000,
-    640.225: 20000,
-    650.653: 15000,
-    653.288: 1000,
-    659.895: 10000,
-    665.209: 1500,
-    667.828: 5000,
-    671.704: 700,
-    692.947: 100000,
-    702.405: 34000,
-    703.241: 85000,
-}
+def _load_neon_reference() -> Dict[float, float]:
+    json_path = Path(__file__).parent / "nist_neon.json"
+    with open(json_path) as fh:
+        data = json.load(fh)
+    return {float(wl): float(intensity) for wl, intensity in data["neon_lines"]}
+
+
+NEON_REFERENCE_SPECTRUM: Dict[float, float] = _load_neon_reference()
 
 # Hardcoded reference wavelengths that anchor the two-point pixel→wavelength
 # display conversion used when plot functions receive ref_pixels.
@@ -503,7 +492,7 @@ def _annotate_sigma_labels(
         (float(popt[3 * i + 1]), float(popt[3 * i + 2]), float(popt[3 * i]))
         for i in range(n)
     )
-    fs = 0.55 * plt.rcParams["font.size"]
+    fs = 0.55 * plt.rcParams["font.size"] + 2
     dy, offset = 0.09, 0.04 * xr
     placed: list = []
     box_style = dict(
@@ -903,8 +892,8 @@ def plot_gaussian_fit(
         ax.plot(x_plot, y_fit, color=_C_YELLOW, linewidth=2.5, label="fit")
         ax.set_xlabel(xlabel)
         ax.set_ylabel("Counts (-)")
-        ax.set_title("Gaussian fit of measured peaks")
-        ax.legend(loc="upper right", frameon=True)
+        ax.legend(loc="lower center", frameon=True, ncol=2,
+                  bbox_to_anchor=(0.5, 1.0), borderaxespad=0.5)
 
         # Remap popt peak centres to wavelength space before annotating
         popt_ann = list(popt)

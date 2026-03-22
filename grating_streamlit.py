@@ -895,10 +895,12 @@ else:
                 st.session_state["fa_data"] = {
                     "matched": results["matched"],
                     "unmatched_pixels": results["unmatched_pixels"],
+                    "unmatched_lines": results["unmatched_lines"],
                     "calibration": results["calibration"],
                     "ideal_pixels_used": results["ideal_pixels_used"],
                     "gauss_sigmas_px": results["gauss_fit"]["sigmas_px"],
                     "stats": results["stats"],
+                    "sensor_max": 511 if full_sensor_fa else 255,
                 }
                 st.session_state.pop("fa_error", None)
             except Exception as _e:
@@ -918,34 +920,112 @@ else:
         cal = data["calibration"]
         matched = data["matched"]
 
-        # Summary metrics
-        mc1, mc2 = st.columns(2)
+        # ── Summary metrics
+        a_cal = cal["a_nm_per_pixel"]
+        b_cal = cal["b_nm"]
+        unmatched_lines = data.get("unmatched_lines", {})
+        sensor_max = data.get("sensor_max", 255)
+
+        all_px = list(matched.keys()) + data["unmatched_pixels"]
+        px_lo = 0
+        px_hi = sensor_max
+
+        visible_predicted = {
+            wl: intensity
+            for wl, intensity in unmatched_lines.items()
+            if px_lo <= (wl - b_cal) / a_cal <= px_hi
+        }
+
+        mc1, mc2, mc3 = st.columns(3)
         with mc1:
-            st.metric("Matched peaks", len(matched))
+            st.metric("Detected & matched", len(matched))
         with mc2:
-            st.metric("Unmatched peaks", len(data["unmatched_pixels"]))
+            st.metric("Detected, no match", len(data["unmatched_pixels"]))
+        with mc3:
+            st.metric("Expected, not found", len(visible_predicted))
 
         st.divider()
 
-        # Matched peak table
+        # ── Combined peaks table
         st.markdown(
             f"<span style='font-size:0.75rem;letter-spacing:0.12em;"
             f"text-transform:uppercase;font-weight:700;color:{TEXT_MUTED};'>"
-            f"Matched peaks</span>",
+            f"All peaks in range</span>",
             unsafe_allow_html=True,
         )
-        rows = []
-        for px, info in sorted(matched.items()):
-            rows.append(
-                {
-                    "Pixel": f"{px:.1f}",
-                    "Wavelength (nm)": f"{info['wavelength_nm']:.4f}",
-                    "Predicted pixel": f"{info['pred_pixel']:.2f}",
-                    "Residual (px)": f"{info['delta_px']:+.2f}",
-                    "Intensity": f"{info['intensity']:.0f}",
-                }
+
+        _TABLE_DET = ACCENT  # teal   — detected & matched to NIST
+        _TABLE_DET_NM = "#FFD10F"  # yellow — detected, no NIST match
+        _TABLE_PRED = "#FF8C42"  # orange — NIST line expected but not found
+
+        _tbl_rows = []
+        for px, info in matched.items():
+            _tbl_rows.append(
+                (
+                    float(px),
+                    f"{px:.1f}",
+                    f"{info['wavelength_nm']:.4f}",
+                    "Detected",
+                    _TABLE_DET,
+                    f"{info['intensity']:.0f}",
+                )
             )
-        st.table(rows)
+        for px in data["unmatched_pixels"]:
+            pred_wl = a_cal * float(px) + b_cal
+            _tbl_rows.append(
+                (
+                    float(px),
+                    f"{float(px):.1f}",
+                    f"{pred_wl:.4f}",
+                    "Detected — no match",
+                    _TABLE_DET_NM,
+                    "—",
+                )
+            )
+        for wl, intensity in visible_predicted.items():
+            pred_px = (wl - b_cal) / a_cal
+            _tbl_rows.append(
+                (
+                    pred_px,
+                    f"{pred_px:.1f}",
+                    f"{wl:.4f}",
+                    "Predicted (not found)",
+                    _TABLE_PRED,
+                    f"{intensity:.0f}",
+                )
+            )
+        _tbl_rows.sort(key=lambda r: r[0])
+
+        _th = (
+            f"background:{SURFACE};color:{TEXT_MUTED};font-size:0.72rem;"
+            f"font-weight:700;letter-spacing:0.1em;text-transform:uppercase;"
+            f"padding:0.4rem 0.8rem;border-bottom:1px solid {BORDER};"
+            f"text-align:left;"
+        )
+        _td = f"padding:0.28rem 0.8rem;font-size:0.84rem;border-bottom:1px solid {BORDER};"
+        _html_rows = "".join(
+            f"<tr>"
+            f"<td style='{_td}color:{TEXT_MUTED};'>{i}</td>"
+            f"<td style='{_td}color:{color};'>{px_str}</td>"
+            f"<td style='{_td}color:{color};'>{wl_str}</td>"
+            f"<td style='{_td}color:{color};font-size:0.72rem;'>{label}</td>"
+            f"<td style='{_td}color:{TEXT_MUTED};text-align:right;'>{intens_str}</td>"
+            f"</tr>"
+            for i, (_, px_str, wl_str, label, color, intens_str) in enumerate(
+                _tbl_rows, 1
+            )
+        )
+        st.markdown(
+            f"<table style='border-collapse:collapse;width:100%;'>"
+            f"<thead><tr>"
+            f"<th style='{_th}'>#</th>"
+            f"<th style='{_th}'>Pixel</th>"
+            f"<th style='{_th}'>Wavelength (nm)</th>"
+            f"<th style='{_th}'>Type</th>"
+            f"<th style='{_th}text-align:right;'>NIST intensity</th>"
+            f"</tr></thead><tbody>{_html_rows}</tbody></table>",
+            unsafe_allow_html=True,
+        )
 
         # Six plots in a 2-column grid
         _plot_meta = [
