@@ -65,7 +65,9 @@ def _load_neon_reference() -> Dict[float, float]:
     json_path = Path(__file__).parent / "nist_neon.json"
     with open(json_path) as fh:
         data = json.load(fh)
-    return {float(wl): float(intensity) for wl, intensity in data["neon_lines"]}
+    return {
+        float(wl): float(intensity) for wl, intensity in data["neon_lines"]
+    }
 
 
 NEON_REFERENCE_SPECTRUM: Dict[float, float] = _load_neon_reference()
@@ -473,10 +475,10 @@ def _annotate_sigma_labels(
 ) -> None:
     """Place collision-avoiding σ annotation boxes above each Gaussian peak."""
     fig = ax.figure
-    if not hasattr(fig.canvas, "get_renderer"):
+    if not isinstance(fig.canvas, FigureCanvasAgg):
         FigureCanvasAgg(fig)
     fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
+    renderer = fig.canvas.renderer
     axes_bb = ax.get_window_extent(renderer=renderer)
 
     xlo, xhi = ax.get_xlim()
@@ -892,8 +894,13 @@ def plot_gaussian_fit(
         ax.plot(x_plot, y_fit, color=_C_YELLOW, linewidth=2.5, label="fit")
         ax.set_xlabel(xlabel)
         ax.set_ylabel("Counts (-)")
-        ax.legend(loc="lower center", frameon=True, ncol=2,
-                  bbox_to_anchor=(0.5, 1.0), borderaxespad=0.5)
+        ax.legend(
+            loc="lower center",
+            frameon=True,
+            ncol=2,
+            bbox_to_anchor=(0.5, 1.0),
+            borderaxespad=0.5,
+        )
 
         # Remap popt peak centres to wavelength space before annotating
         popt_ann = list(popt)
