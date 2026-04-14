@@ -1072,10 +1072,10 @@ def run_neon_analysis(
         },
         "figs": {
             "A": fig_A,
-            "B": fig_B,
-            "C": fig_C,
-            "D": fig_D,
-            "E": fig_E,
+            "B": fig_E,
+            "C": fig_B,
+            "D": fig_C,
+            "E": fig_D,
             "F": fig_F,
         },
         "stats": {

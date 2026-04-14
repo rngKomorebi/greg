@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] - 2026-04-14
+
+### Changed
+
+- **Spectrometer Analysis** — reordered the six analysis plots from the
+  original A–B–C–D–E–F sequence to A–E–B–C–D–F (i.e. Linearity promoted
+  to the top-right slot), then relabelled the figures A–F to match the
+  new reading order:
+  - **(A)** Neighbour nm/px scale (unchanged position).
+  - **(B)** Linearity / spectrometer stability (was E).
+  - **(C)** All-pair nm/px scale, coloured by first peak (was B).
+  - **(D)** nm/px scale vs distance between peaks (was C).
+  - **(E)** NIST overlay — measured vs ideal spectrum (was D).
+  - **(F)** Gaussian fit of measured peaks (unchanged position).
+
+### Added
+
+- **Download plots as PNG** button in the Spectrometer Analysis results
+  section: stitches all six analysis figures into a single 2×3 PNG grid
+  and offers it as `greg_analysis.png` via `st.download_button`.
+
 ## [0.0.2] - 2026-03-21
 
 Added third tab: spectrometer analysis for scale, linearity, resolution.

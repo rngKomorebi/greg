@@ -33,6 +33,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 from matplotlib.figure import Figure
+from PIL import Image
 
 import analysis_core as ac
 import physics_core as pc
@@ -1036,23 +1037,23 @@ else:
             ),
             (
                 "B",
+                "Linearity",
+                "Spectrometer stability",
+            ),
+            (
+                "C",
                 "Scale for all combinations",
                 "nm/px for every peak pair, coloured by first peak",
             ),
             (
-                "C",
+                "D",
                 "Scale vs Distance",
                 "nm/px as a function of distance between peaks",
             ),
             (
-                "D",
+                "E",
                 "Ideal Spectrum Overlay",
                 "Measured spectrum vs NIST values",
-            ),
-            (
-                "E",
-                "Linearity",
-                "Spectrometer stability",
             ),
             (
                 "F",
@@ -1079,6 +1080,22 @@ else:
                     unsafe_allow_html=True,
                 )
                 st.image(figs_png[key], use_container_width=True)
+
+        # ── Download all plots as a single PNG grid
+        _imgs = [Image.open(io.BytesIO(figs_png[k])) for k, *_ in _plot_meta]
+        _w = max(i.width for i in _imgs)
+        _h = max(i.height for i in _imgs)
+        _grid = Image.new("RGB", (_w * 2, _h * 3), (14, 17, 23))
+        for _i, _img in enumerate(_imgs):
+            _grid.paste(_img, ((_i % 2) * _w, (_i // 2) * _h))
+        _buf = io.BytesIO()
+        _grid.save(_buf, format="PNG")
+        st.download_button(
+            "Download plots as PNG",
+            data=_buf.getvalue(),
+            file_name="greg_analysis.png",
+            mime="image/png",
+        )
 
     elif uploaded_file is None:
         st.info(
