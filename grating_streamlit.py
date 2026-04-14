@@ -1090,10 +1090,11 @@ else:
             _grid.paste(_img, ((_i % 2) * _w, (_i // 2) * _h))
         _buf = io.BytesIO()
         _grid.save(_buf, format="PNG")
+        _stem = uploaded_file.name.rsplit(".", 1)[0] if uploaded_file else "analysis"
         st.download_button(
             "Download plots as PNG",
             data=_buf.getvalue(),
-            file_name="greg_analysis.png",
+            file_name=f"{_stem}_greg.png",
             mime="image/png",
         )
 

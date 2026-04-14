@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Download plots as PNG** button in the Spectrometer Analysis results
   section: stitches all six analysis figures into a single 2×3 PNG grid
-  and offers it as `greg_analysis.png` via `st.download_button`.
+  and offers it as `<original_filename>_greg.png` via `st.download_button`.
 
 ## [0.0.2] - 2026-03-21
 
