@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2026-04-20
+
+### Added
+
+- **Spectrometer Analysis — peaks table** gains a **Δ (px)** column showing
+  the signed residual (detected pixel − NIST-predicted pixel) for each
+  matched peak under the final calibration. Unmatched rows show `—`.
+  Column header has a hover tooltip explaining the value.
+
+- **Spectrometer Analysis — Plot E** (Ideal Spectrum Overlay) gets a hover
+  info icon `ⓘ` next to its title explaining that relative line intensities
+  differ from NIST because they depend on the Ne source and its drive
+  conditions; only peak *positions* are used for calibration.
+
+- **Matching tolerance** sidebar input gains a `help` tooltip describing the
+  parameter: maximum pixel distance allowed between a detected peak and its
+  NIST-predicted position, and the trade-off between false matches and
+  missed peaks.
+
+### Changed
+
+- **Spectrometer Analysis — six plots** are now individually fault-tolerant:
+  each plot is generated in its own `try/except` block inside
+  `run_neon_analysis`. A failing plot renders as a dark placeholder image
+  with the error message; the remaining five plots are unaffected.
+  `run_neon_analysis` returns an additional `plot_errors` dict keyed A–F.
+
+- **Gaussian fit** (step 3 of the analysis pipeline) is likewise wrapped:
+  failure sets Plot F to a placeholder and records the error, without
+  aborting the other five plots.
+
+- **All legend positions** in the six analysis plots changed from
+  `"upper right"` to `"best"` to avoid occluding data points.
+
+- **Plot C legend** labels changed from generic `Peak 1 / Peak 2 / …` to
+  the actual pixel position of each group's first peak (`px 42`, `px 87`, …),
+  matching the pixel-space axis of the plot.
+
 ## [0.0.3] - 2026-04-14
 
 ### Changed

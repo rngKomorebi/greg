@@ -619,7 +619,7 @@ def plot_neighbour_scales(
         if scale_ylim is not None:
             ax_scale.set_ylim(*scale_ylim)
         ax_scale.set_title("Neighbour nm/px scale (midpoint between peaks)")
-        ax_scale.legend(loc="upper right", frameon=True)
+        ax_scale.legend(loc="best", frameon=True)
         _apply_dark_style(fig, ax_ph, ax_scale)
         fig.tight_layout()
     return fig, {"neighbour_table": table, "mean_scale_neighbours": mean_scale}
@@ -643,7 +643,8 @@ def plot_allpair_scales(
     table, i_idx, _, xmid, _, scales, mean_scale = dispersion_all_pairs(
         wavelengths_nm, peak_pixels
     )
-    n_groups = len(np.asarray(peak_pixels)) - 1
+    _, px_sorted = _sort_by_wavelength(wavelengths_nm, peak_pixels)
+    n_groups = len(px_sorted) - 1
     colors = [
         plt.get_cmap("cool")(k)
         for k in np.linspace(0.1, 0.9, max(n_groups, 1))
@@ -660,7 +661,7 @@ def plot_allpair_scales(
                 s=60,
                 color=colors[i],
                 alpha=0.85,
-                label=f"Peak {i + 1}",
+                label=f"Peak at {px_sorted[i]:.0f}",
             )
         ax.axhline(
             mean_scale,
@@ -674,7 +675,7 @@ def plot_allpair_scales(
         ax.set_title("nm/px scale — coloured by first peak in pair")
         if scale_ylim is not None:
             ax.set_ylim(*scale_ylim)
-        ax.legend(loc="upper right", frameon=True)
+        ax.legend(loc="best", frameon=True)
         _apply_dark_style(fig, ax)
         fig.tight_layout()
     return fig, {"all_pairs_table": table, "mean_scale_all_pairs": mean_scale}
@@ -715,7 +716,7 @@ def plot_scale_vs_separation(
         ax.set_title("nm/px scale as a function of distance between peaks")
         if scale_ylim is not None:
             ax.set_ylim(*scale_ylim)
-        ax.legend(loc="upper right", frameon=True)
+        ax.legend(loc="best", frameon=True)
         _apply_dark_style(fig, ax)
         fig.tight_layout()
     return fig, {"all_pairs_table": table, "mean_scale_all_pairs": mean_scale}
@@ -791,7 +792,7 @@ def plot_ideal_spectrum(
         ax.set_ylabel("Normalised intensity (-)")
         ax.set_ylim(-0.05, 1.05)
         ax.set_title("NIST values vs measured data")
-        ax.legend(loc="upper right", frameon=True)
+        ax.legend(loc="best", frameon=True)
         _apply_dark_style(fig, ax)
         fig.tight_layout()
     return fig
@@ -999,66 +1000,121 @@ def run_neon_analysis(
         )
 
     # ── 3. Fit Gaussians to the raw sensor data ───────────────────────────────
-    raw_fig = _load_pickle_fig(pkl_file)
-    raw_ax = max(
-        raw_fig.axes,
-        key=lambda ax: sum(
-            len(ln.get_xdata())
-            for ln in ax.lines
-            if ln.get_xdata() is not None
-        ),
-    )
-    ln = max(
-        raw_ax.lines,
-        key=lambda l: 0 if l.get_xdata() is None else len(l.get_xdata()),
-    )
-    x_raw = np.asarray(ln.get_xdata(), float)
-    y_raw = np.asarray(ln.get_ydata(), float)
-    plt.close(raw_fig)
+    _gauss_ok = False
+    x_raw = y_raw = popt = None
+    sigmas_px = np.full(len(peak_pixels), float("nan"))
+    _gauss_fit: dict = {"sigmas_px": sigmas_px.tolist(), "popt": []}
+    _gauss_error: Optional[str] = None
+    try:
+        raw_fig = _load_pickle_fig(pkl_file)
+        raw_ax = max(
+            raw_fig.axes,
+            key=lambda ax: sum(
+                len(ln.get_xdata())
+                for ln in ax.lines
+                if ln.get_xdata() is not None
+            ),
+        )
+        ln = max(
+            raw_ax.lines,
+            key=lambda l: 0 if l.get_xdata() is None else len(l.get_xdata()),
+        )
+        x_raw = np.asarray(ln.get_xdata(), float)
+        y_raw = np.asarray(ln.get_ydata(), float)
+        plt.close(raw_fig)
+        sigmas_px, popt = fit_gaussians(x_raw, y_raw, peak_pixels)
+        _gauss_fit = {"sigmas_px": sigmas_px.tolist(), "popt": popt.tolist()}
+        _gauss_ok = True
+    except Exception as _e:
+        _gauss_error = str(_e)
 
-    sigmas_px, popt = fit_gaussians(x_raw, y_raw, peak_pixels)
-
-    # ── 4. Six plots ──────────────────────────────────────────────────────────
+    # ── 4. Six plots — each isolated so one failure does not block the rest ───
     _, _, _, _mean_scale = dispersion_neighbours(wavelengths_nm, peak_pixels)
     sigma_px = _mean_scale / 3.0
-    fig_A, data_A = plot_neighbour_scales(
-        pkl_file,
-        wavelengths_nm,
-        peak_pixels,
-        scale_ylim=scale_ylim,
-        ref_pixels=ref_pixels,
-    )
-    fig_B, data_B = plot_allpair_scales(
-        wavelengths_nm,
-        peak_pixels,
-        scale_ylim=scale_ylim,
-    )
-    fig_C, data_C = plot_scale_vs_separation(
-        wavelengths_nm,
-        peak_pixels,
-        scale_ylim=scale_ylim,
-    )
-    fig_D = plot_ideal_spectrum(
-        pkl_file,
-        ideal_pixels=ideal_pixels,
-        intensities=intensities,
-        sigma_px=sigma_px,
-        window=window,
-        ideal_color=ideal_color,
-        sensor_range=sensor_range,
-        ref_pixels=ref_pixels,
-    )
-    fig_E, data_E = plot_linearity(
-        pixels=peak_pixels,
-        wavelengths_nm=wavelengths_nm,
-    )
-    fig_F = plot_gaussian_fit(
-        x_raw,
-        y_raw,
-        popt,
-        scale_nm_per_px=a,
-        ref_pixels=ref_pixels,
-    )
+
+    figs: dict = {}
+    plot_errors: dict = {}
+    _data_A: dict = {"mean_scale_neighbours": float("nan")}
+    _data_B: dict = {"mean_scale_all_pairs": float("nan")}
+    _data_E: dict = {"a_nm_per_pixel": a, "b_nm": b}
+
+    try:
+        _fig, _d = plot_neighbour_scales(
+            pkl_file,
+            wavelengths_nm,
+            peak_pixels,
+            scale_ylim=scale_ylim,
+            ref_pixels=ref_pixels,
+        )
+        figs["A"] = _fig
+        _data_A = _d
+    except Exception as _e:
+        figs["A"] = None
+        plot_errors["A"] = str(_e)
+
+    try:
+        _fig, _d = plot_linearity(
+            pixels=peak_pixels, wavelengths_nm=wavelengths_nm
+        )
+        figs["B"] = _fig
+        _data_E = _d
+    except Exception as _e:
+        figs["B"] = None
+        plot_errors["B"] = str(_e)
+
+    try:
+        _fig, _d = plot_allpair_scales(
+            wavelengths_nm,
+            peak_pixels,
+            scale_ylim=scale_ylim,
+        )
+        figs["C"] = _fig
+        _data_B = _d
+    except Exception as _e:
+        figs["C"] = None
+        plot_errors["C"] = str(_e)
+
+    try:
+        _fig, _ = plot_scale_vs_separation(
+            wavelengths_nm,
+            peak_pixels,
+            scale_ylim=scale_ylim,
+        )
+        figs["D"] = _fig
+    except Exception as _e:
+        figs["D"] = None
+        plot_errors["D"] = str(_e)
+
+    try:
+        figs["E"] = plot_ideal_spectrum(
+            pkl_file,
+            ideal_pixels=ideal_pixels,
+            intensities=intensities,
+            sigma_px=sigma_px,
+            window=window,
+            ideal_color=ideal_color,
+            sensor_range=sensor_range,
+            ref_pixels=ref_pixels,
+        )
+    except Exception as _e:
+        figs["E"] = None
+        plot_errors["E"] = str(_e)
+
+    if _gauss_ok:
+        try:
+            figs["F"] = plot_gaussian_fit(
+                x_raw,
+                y_raw,
+                popt,
+                scale_nm_per_px=a,
+                ref_pixels=ref_pixels,
+            )
+        except Exception as _e:
+            figs["F"] = None
+            plot_errors["F"] = str(_e)
+    else:
+        figs["F"] = None
+        plot_errors["F"] = _gauss_error or "Gaussian fit failed"
 
     return {
         "matched": matched,
@@ -1066,22 +1122,13 @@ def run_neon_analysis(
         "unmatched_lines": unmatched_lines,
         "calibration": {"a_nm_per_pixel": a, "b_nm": b},
         "ideal_pixels_used": ideal_pixels,
-        "gauss_fit": {
-            "sigmas_px": sigmas_px.tolist(),
-            "popt": popt.tolist(),
-        },
-        "figs": {
-            "A": fig_A,
-            "B": fig_E,
-            "C": fig_B,
-            "D": fig_C,
-            "E": fig_D,
-            "F": fig_F,
-        },
+        "gauss_fit": _gauss_fit,
+        "figs": figs,
+        "plot_errors": plot_errors,
         "stats": {
-            "mean_scale_neighbours": data_A["mean_scale_neighbours"],
-            "mean_scale_all_pairs": data_B["mean_scale_all_pairs"],
-            "a_nm_per_pixel": data_E["a_nm_per_pixel"],
-            "b_nm": data_E["b_nm"],
+            "mean_scale_neighbours": _data_A["mean_scale_neighbours"],
+            "mean_scale_all_pairs": _data_B["mean_scale_all_pairs"],
+            "a_nm_per_pixel": _data_E["a_nm_per_pixel"],
+            "b_nm": _data_E["b_nm"],
         },
     }

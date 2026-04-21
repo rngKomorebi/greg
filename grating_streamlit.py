@@ -494,6 +494,12 @@ with st.sidebar:
             value=5.0,
             step=0.5,
             key="tolerance_px_fa",
+            help=(
+                "Maximum allowed distance (in pixels) between a detected peak "
+                "and its predicted NIST position for a match to be accepted. "
+                "Too large risks false matches; too small rejects real peaks "
+                "if the seed calibration is slightly off."
+            ),
         )
         full_sensor_fa = st.checkbox(
             "Full sensor (512 px, else 256 px)",
@@ -883,16 +889,42 @@ else:
                     full_sensor=full_sensor_fa,
                 )
                 # Serialise figures to PNG bytes for session persistence
+                _plot_errors = results.get("plot_errors", {})
                 figs_png = {}
                 for key, fig in results["figs"].items():
-                    buf = io.BytesIO()
-                    fig.savefig(
-                        buf, format="png", dpi=110, bbox_inches="tight"
-                    )
-                    buf.seek(0)
-                    figs_png[key] = buf.getvalue()
-                    plt.close(fig)
+                    if fig is None:
+                        _err_msg = _plot_errors.get(key, "Unknown error")
+                        _ph = plt.Figure(figsize=(16, 10), facecolor=PLOT_BG)
+                        _ph_ax = _ph.add_subplot(111, facecolor=PLOT_BG)
+                        _ph_ax.set_axis_off()
+                        _ph_ax.text(
+                            0.5,
+                            0.5,
+                            f"Plot {key} could not be generated:\n\n{_err_msg}",
+                            ha="center",
+                            va="center",
+                            fontsize=13,
+                            color=TEXT,
+                            transform=_ph_ax.transAxes,
+                            wrap=True,
+                        )
+                        _pbuf = io.BytesIO()
+                        _ph.savefig(
+                            _pbuf, format="png", dpi=110, bbox_inches="tight"
+                        )
+                        _pbuf.seek(0)
+                        figs_png[key] = _pbuf.getvalue()
+                        plt.close(_ph)
+                    else:
+                        buf = io.BytesIO()
+                        fig.savefig(
+                            buf, format="png", dpi=110, bbox_inches="tight"
+                        )
+                        buf.seek(0)
+                        figs_png[key] = buf.getvalue()
+                        plt.close(fig)
                 st.session_state["fa_figs_png"] = figs_png
+                st.session_state["fa_plot_errors"] = _plot_errors
                 st.session_state["fa_data"] = {
                     "matched": results["matched"],
                     "unmatched_pixels": results["unmatched_pixels"],
@@ -969,6 +1001,7 @@ else:
                     "Detected",
                     _TABLE_DET,
                     f"{info['intensity']:.0f}",
+                    f"{info['delta_px']:+.2f}",
                 )
             )
         for px in data["unmatched_pixels"]:
@@ -980,6 +1013,7 @@ else:
                     f"{pred_wl:.4f}",
                     "Detected — no match",
                     _TABLE_DET_NM,
+                    "—",
                     "—",
                 )
             )
@@ -993,6 +1027,7 @@ else:
                     "Predicted (not found)",
                     _TABLE_PRED,
                     f"{intensity:.0f}",
+                    "—",
                 )
             )
         _tbl_rows.sort(key=lambda r: r[0])
@@ -1011,10 +1046,17 @@ else:
             f"<td style='{_td}color:{color};'>{wl_str}</td>"
             f"<td style='{_td}color:{color};font-size:0.72rem;'>{label}</td>"
             f"<td style='{_td}color:{TEXT_MUTED};text-align:right;'>{intens_str}</td>"
+            f"<td style='{_td}color:{TEXT_MUTED};text-align:right;'>{delta_str}</td>"
             f"</tr>"
-            for i, (_, px_str, wl_str, label, color, intens_str) in enumerate(
-                _tbl_rows, 1
-            )
+            for i, (
+                _,
+                px_str,
+                wl_str,
+                label,
+                color,
+                intens_str,
+                delta_str,
+            ) in enumerate(_tbl_rows, 1)
         )
         st.markdown(
             f"<table style='border-collapse:collapse;width:100%;'>"
@@ -1024,6 +1066,10 @@ else:
             f"<th style='{_th}'>Wavelength (nm)</th>"
             f"<th style='{_th}'>Type</th>"
             f"<th style='{_th}text-align:right;'>NIST intensity</th>"
+            f"<th style='{_th}text-align:right;cursor:help;' "
+            f"title='Residual between the detected pixel and its predicted position "
+            f"from the final calibration. Only available for matched peaks. "
+            f"Positive = detected peak is to the right of the prediction.'>Δ (px)</th>"
             f"</tr></thead><tbody>{_html_rows}</tbody></table>",
             unsafe_allow_html=True,
         )
@@ -1034,37 +1080,60 @@ else:
                 "A",
                 "Scale between neighbors",
                 "nm/px scale overlaid on sensor population data",
+                None,
             ),
-            (
-                "B",
-                "Linearity",
-                "Spectrometer stability",
-            ),
+            ("B", "Linearity", "Spectrometer stability", None),
             (
                 "C",
                 "Scale for all combinations",
                 "nm/px for every peak pair, coloured by first peak",
+                None,
             ),
             (
                 "D",
                 "Scale vs Distance",
                 "nm/px as a function of distance between peaks",
+                None,
             ),
             (
                 "E",
                 "Ideal Spectrum Overlay",
                 "Measured spectrum vs NIST values",
+                "The observed line intensities depend on the Ne source and how it is "
+                "powered (current, pressure, temperature), so the relative amplitudes "
+                "will differ from the NIST tabulated values. Only the peak positions "
+                "are used for calibration.",
             ),
             (
                 "F",
                 "Gaussian Fit",
                 "Gaussian fit of the measured spectral lines",
+                None,
             ),
         ]
         col_left, col_right = st.columns(2)
-        for idx, (key, title, caption) in enumerate(_plot_meta):
+        for idx, (key, title, caption, note) in enumerate(_plot_meta):
             col = col_left if idx % 2 == 0 else col_right
             with col:
+                _note_html = ""
+                if note:
+                    _note_html = (
+                        f"<style>"
+                        f".tt-{key}{{position:relative;display:inline-block;"
+                        f"cursor:help;margin-left:0.4rem;font-size:0.8rem;"
+                        f"color:{TEXT_MUTED};}}"
+                        f".tt-{key} .tt-box{{visibility:hidden;background:{SURFACE};"
+                        f"color:{TEXT};text-align:left;border-radius:4px;"
+                        f"padding:8px 10px;position:absolute;z-index:9999;"
+                        f"bottom:130%;left:50%;transform:translateX(-50%);"
+                        f"width:280px;font-size:0.72rem;line-height:1.5;"
+                        f"border:1px solid {BORDER};pointer-events:none;}}"
+                        f".tt-{key}:hover .tt-box{{visibility:visible;}}"
+                        f"</style>"
+                        f'<span class="tt-{key}">ⓘ'
+                        f'<span class="tt-box">{note}</span>'
+                        f"</span>"
+                    )
                 st.markdown(
                     f"""
                     <div style="margin-bottom:0.25rem;">
@@ -1073,6 +1142,7 @@ else:
                                      font-weight:700;">Plot {key}</span>
                         <span style="font-size:0.95rem;font-weight:700;
                                      color:{TEXT};margin-left:0.5rem;">{title}</span>
+                        {_note_html}
                     </div>
                     <div style="font-size:0.72rem;color:{TEXT_MUTED};
                                 margin-bottom:0.5rem;">{caption}</div>
@@ -1090,7 +1160,11 @@ else:
             _grid.paste(_img, ((_i % 2) * _w, (_i // 2) * _h))
         _buf = io.BytesIO()
         _grid.save(_buf, format="PNG")
-        _stem = uploaded_file.name.rsplit(".", 1)[0] if uploaded_file else "analysis"
+        _stem = (
+            uploaded_file.name.rsplit(".", 1)[0]
+            if uploaded_file
+            else "analysis"
+        )
         st.download_button(
             "Download plots as PNG",
             data=_buf.getvalue(),
