@@ -29,6 +29,7 @@ License: MIT
 
 import io
 
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
@@ -58,6 +59,149 @@ PLOT_BG = "#0e1117"
 PLOT_SURFACE = "#0e1117"
 PLOT_AXIS = "white"
 PLOT_GRID = "gray"
+
+
+def _make_grating_diagram(
+    alpha_deg: float,
+    lines_per_mm: float,
+    wavelength_nm: float,
+    order_m: int,
+) -> Figure:
+    """Return a Figure illustrating the grating geometry for the current params."""
+    d_nm = 1e6 / lines_per_mm
+    alpha_rad = np.radians(alpha_deg)
+    L = 3.2
+
+    # Determine which orders exist
+    valid_orders, evanescent_m = [], []
+    for m in range(-3, 5):
+        s = m * wavelength_nm / d_nm - np.sin(alpha_rad)
+        if -1.0 <= s <= 1.0:
+            valid_orders.append((m, float(np.degrees(np.arcsin(s)))))
+        else:
+            evanescent_m.append(m)
+    valid_orders.sort(key=lambda x: x[0])
+
+    # Colour scheme: selected order = ACCENT, m=0 = MUTED, rest cycle
+    _cycle = ["#FFD10F", "#c084fc", "#FF8C42", "#f87171", "#60a5fa"]
+    order_colors: dict = {}
+    ci = 0
+    for m, _ in valid_orders:
+        if m == order_m:
+            order_colors[m] = ACCENT
+        elif m == 0:
+            order_colors[m] = TEXT_MUTED
+        else:
+            order_colors[m] = _cycle[ci % len(_cycle)]
+            ci += 1
+
+    fig = Figure(figsize=(12, 6.5), facecolor=PLOT_BG)
+    ax = fig.add_subplot(111, facecolor=PLOT_BG)
+    ax.set_xlim(-5.5, 5.5)
+    ax.set_ylim(-1.4, 5.0)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    # Grating surface
+    ax.plot([-5, 5], [0, 0], color=ACCENT, lw=3, solid_capstyle="round", zorder=5)
+    for x in np.linspace(-4.8, 4.8, 38):
+        ax.plot([x, x - 0.055], [0, -0.2], color=ACCENT, lw=0.7, alpha=0.4)
+    ax.text(4.8, -0.72, "grating", color=ACCENT, fontsize=10, ha="right")
+
+    # Normal
+    ax.plot([0, 0], [-0.7, 4.7], color=TEXT_MUTED, lw=1.1, linestyle="--", alpha=0.55)
+    ax.annotate(
+        "", xy=(0, 4.7), xytext=(0, 4.35),
+        arrowprops=dict(arrowstyle="->", color=TEXT_MUTED, lw=1.1),
+    )
+    ax.text(0.12, 4.58, "normal", color=TEXT_MUTED, fontsize=10)
+
+    # Incident beam: source at (−sin α · L, cos α · L)
+    sx, sy = -np.sin(alpha_rad) * L, np.cos(alpha_rad) * L
+    ax.annotate(
+        "", xy=(0, 0), xytext=(sx, sy),
+        arrowprops=dict(arrowstyle="->", color=PLOT_AXIS, lw=2.2, mutation_scale=15),
+    )
+    ax.text(sx - 0.15, sy + 0.12, "incident", color=PLOT_AXIS, fontsize=11,
+            ha="right", fontweight="bold")
+
+    # α arc (from normal CCW to incident beam direction)
+    r_a = 0.85
+    ax.add_patch(mpatches.Arc(
+        (0, 0), r_a * 2, r_a * 2, angle=0,
+        theta1=90, theta2=90 + alpha_deg, color=PLOT_AXIS, lw=1.6,
+    ))
+    mid_a = np.radians(90 + alpha_deg / 2)
+    ax.text(
+        np.cos(mid_a) * (r_a + 0.3), np.sin(mid_a) * (r_a + 0.3),
+        f"α = {alpha_deg:.0f}°", color=PLOT_AXIS, fontsize=11,
+        fontweight="bold", ha="center", va="center",
+    )
+
+    # Diffracted orders: beam endpoint = (−sin β · L, cos β · L)
+    beta_selected = None
+    for m, beta_deg in valid_orders:
+        color = order_colors.get(m, TEXT_MUTED)
+        lw = 2.4 if m == order_m else 1.7
+        beta_rad = np.radians(beta_deg)
+        ex, ey = -np.sin(beta_rad) * L, np.cos(beta_rad) * L
+        ax.annotate(
+            "", xy=(ex, ey), xytext=(0, 0),
+            arrowprops=dict(arrowstyle="->", color=color, lw=lw, mutation_scale=14),
+        )
+        side = "right" if ex > 0 else "left"
+        dx, ha = (0.18, "left") if side == "right" else (-0.18, "right")
+        fw = "bold" if m == order_m else "normal"
+        m_label = f"m = {m:+d}" if m != 0 else "m = 0"
+        ax.text(ex + dx, ey + 0.12, m_label, color=color, fontsize=11, ha=ha, fontweight=fw)
+        if m == 0:
+            ax.text(ex + dx, ey - 0.28, "specular  (β = −α)",
+                    color=color, fontsize=8, ha=ha, alpha=0.8)
+        if m == order_m:
+            beta_selected = beta_deg
+            ax.text(ex + dx, ey - 0.28, f"β = {beta_deg:+.1f}°",
+                    color=color, fontsize=8, ha=ha)
+
+    # β arc for the selected order
+    if beta_selected is not None:
+        r_b = 1.5
+        col_sel = order_colors.get(order_m, ACCENT)
+        t1 = 90 if beta_selected >= 0 else 90 + beta_selected
+        t2 = 90 + beta_selected if beta_selected >= 0 else 90
+        ax.add_patch(mpatches.Arc(
+            (0, 0), r_b * 2, r_b * 2, angle=0, theta1=t1, theta2=t2,
+            color=col_sel, lw=1.5,
+        ))
+        mid_b = np.radians(90 + beta_selected / 2)
+        ax.text(
+            np.cos(mid_b) * (r_b + 0.32), np.sin(mid_b) * (r_b + 0.32),
+            "β", color=col_sel, fontsize=15, fontweight="bold", ha="center", va="center",
+        )
+
+    # Side legend
+    ax.text(-4.8, 4.72, "β > 0  (same side as incident)", color=TEXT_MUTED, fontsize=9)
+    ax.text(4.8, 4.72, "β < 0  (opposite side)", color=TEXT_MUTED, fontsize=9, ha="right")
+
+    # Evanescent note
+    ev_shown = sorted(m for m in evanescent_m if -2 <= m <= 3)
+    if ev_shown:
+        ax.text(
+            0, -0.98,
+            "Evanescent (not shown): " + ", ".join(f"m={m:+d}" for m in ev_shown),
+            color=TEXT_MUTED, fontsize=8, ha="center", alpha=0.65,
+        )
+
+    # Equation footer
+    ax.text(
+        0, -1.2,
+        (rf"$m\lambda = d\,(\sin\alpha + \sin\beta)$   ·   "
+         rf"{int(lines_per_mm)} gr/mm · λ = {wavelength_nm:.0f} nm · α = {alpha_deg:.0f}°"),
+        color=TEXT_MUTED, fontsize=10, ha="center",
+    )
+
+    fig.tight_layout(pad=0.3)
+    return fig
+
 
 st.markdown(
     f"""
@@ -705,6 +849,17 @@ if page == "Output Angle":
         cbar.outline.set_edgecolor(PLOT_AXIS)
 
         st.pyplot(fig, use_container_width=True)
+
+        st.divider()
+        st.markdown(
+            f"<span style='font-size:0.75rem;letter-spacing:0.12em;"
+            f"text-transform:uppercase;font-weight:700;color:{TEXT_MUTED};'>"
+            f"Geometry diagram</span>",
+            unsafe_allow_html=True,
+        )
+        _diag = _make_grating_diagram(alpha_deg, lines_per_mm, wavelength_nm, order_m)
+        st.pyplot(_diag, use_container_width=True)
+        plt.close(_diag)
 
 
 # ============================================================================
