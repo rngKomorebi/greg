@@ -60,6 +60,13 @@ PLOT_SURFACE = "#0e1117"
 PLOT_AXIS = "white"
 PLOT_GRID = "gray"
 
+# Camera options: display name → pixel pitch in µm
+CAMERAS = {
+    "LinoSPAD2 (26.2 µm)": 26.2,
+    "Timepix3 (55 µm)": 55.0,
+    "Moravian CMOS (3.45 µm)": 3.45,
+}
+
 
 def _make_grating_diagram(
     alpha_deg: float,
@@ -333,6 +340,14 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
+    selected_camera = st.selectbox(
+        "Camera",
+        list(CAMERAS.keys()),
+        index=0,
+        key="camera_select",
+    )
+    pixel_pitch_um = CAMERAS[selected_camera]
+
     page = st.radio(
         "",
         ["Output Angle", "Sampling Sweep", "Spectrometer Analysis"],
@@ -344,15 +359,7 @@ with st.sidebar:
     # Output Angle params
     if page == "Output Angle":
         st.subheader("Instrument Parameters")
-        pixel_pitch_um = st.number_input(
-            "Pixel pitch p (µm)",
-            min_value=0.1,
-            max_value=1000.0,
-            value=26.2,
-            step=0.1,
-            format="%.3f",
-            key="pixel_pitch_oa",
-        )
+        st.caption(f"Pixel pitch p = **{pixel_pitch_um:.3f} µm** ({selected_camera.split(' (')[0]})")
         lines_per_mm = st.number_input(
             "Groove density (lines/mm)",
             min_value=50,
@@ -439,15 +446,7 @@ with st.sidebar:
     # Sampling Sweep params
     elif page == "Sampling Sweep":
         st.subheader("Instrument Parameters")
-        pixel_pitch_um_sw = st.number_input(
-            "Pixel pitch p (µm)",
-            min_value=0.1,
-            max_value=1000.0,
-            value=26.2,
-            step=0.1,
-            format="%.3f",
-            key="pixel_pitch_sw",
-        )
+        st.caption(f"Pixel pitch p = **{pixel_pitch_um:.3f} µm** ({selected_camera.split(' (')[0]})")
         lines_per_mm_sw = st.number_input(
             "Groove density (lines/mm)",
             min_value=50,
@@ -891,7 +890,7 @@ elif page == "Sampling Sweep":
     current_nm_per_pix = None
     try:
         current_nm_per_pix = pc.nm_per_pixel(
-            p=pixel_pitch_um_sw * 1e-6,
+            p=pixel_pitch_um * 1e-6,
             lines_per_mm=lines_per_mm_sw,
             alpha_deg=alpha_deg_sw,
             lambda_nm=wavelength_nm_sw,
@@ -923,7 +922,7 @@ elif page == "Sampling Sweep":
 
             y_values.append(
                 pc.nm_per_pixel(
-                    p=pixel_pitch_um_sw * 1e-6,
+                    p=pixel_pitch_um * 1e-6,
                     lines_per_mm=lines_val,
                     alpha_deg=alpha_val,
                     lambda_nm=lambda_val,
