@@ -60,11 +60,11 @@ PLOT_SURFACE = "#0e1117"
 PLOT_AXIS = "white"
 PLOT_GRID = "gray"
 
-# Camera options: display name → pixel pitch in µm
+# Camera options: display name → {pitch_um, pixels}
 CAMERAS = {
-    "LinoSPAD2 (26.2 µm)": 26.2,
-    "Timepix3 (55 µm)": 55.0,
-    "Moravian CMOS (3.45 µm)": 3.45,
+    "LinoSPAD2 (26.2 µm)": {"pitch_um": 26.2, "pixels": 256},
+    "Timepix3 (55 µm)": {"pitch_um": 55.0, "pixels": 256},
+    "Moravian CMOS (3.45 µm)": {"pitch_um": 3.45, "pixels": 8336},
 }
 
 
@@ -346,7 +346,9 @@ with st.sidebar:
         index=0,
         key="camera_select",
     )
-    pixel_pitch_um = CAMERAS[selected_camera]
+    _cam = CAMERAS[selected_camera]
+    pixel_pitch_um = _cam["pitch_um"]
+    camera_pixels = _cam["pixels"]
 
     page = st.radio(
         "",
@@ -359,7 +361,7 @@ with st.sidebar:
     # Output Angle params
     if page == "Output Angle":
         st.subheader("Instrument Parameters")
-        st.caption(f"Pixel pitch p = **{pixel_pitch_um:.3f} µm** ({selected_camera.split(' (')[0]})")
+        st.caption(f"Pixel pitch p = **{pixel_pitch_um:.3f} µm**  ·  **{camera_pixels}** px")
         lines_per_mm = st.number_input(
             "Groove density (lines/mm)",
             min_value=50,
@@ -446,7 +448,7 @@ with st.sidebar:
     # Sampling Sweep params
     elif page == "Sampling Sweep":
         st.subheader("Instrument Parameters")
-        st.caption(f"Pixel pitch p = **{pixel_pitch_um:.3f} µm** ({selected_camera.split(' (')[0]})")
+        st.caption(f"Pixel pitch p = **{pixel_pitch_um:.3f} µm**  ·  **{camera_pixels}** px")
         lines_per_mm_sw = st.number_input(
             "Groove density (lines/mm)",
             min_value=50,
@@ -719,7 +721,7 @@ if page == "Output Angle":
         beta_current = pc.output_angle(
             order_m, wavelength_nm, int(lines_per_mm), alpha_deg
         )
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
             st.success(f"Current output angle β = **{beta_current:.2f}°**")
         try:
@@ -733,6 +735,8 @@ if page == "Output Angle":
             )
             with c2:
                 st.info(f"Spectral sampling: **{nm_per_pix:.4f} nm/pixel**")
+            with c3:
+                st.info(f"Spectral range: **{nm_per_pix * camera_pixels:.2f} nm**")
         except Exception as e:
             st.warning(f"Could not calculate nm/pixel: {e}")
     except ValueError as e:
@@ -897,7 +901,11 @@ elif page == "Sampling Sweep":
             m=order_m_sw,
             f=focal_length_mm_sw * 1e-3,
         )
-        st.success(f"Current: **{current_nm_per_pix:.4f} nm/pixel**")
+        _sw_c1, _sw_c2 = st.columns(2)
+        with _sw_c1:
+            st.success(f"Current: **{current_nm_per_pix:.4f} nm/pixel**")
+        with _sw_c2:
+            st.info(f"Spectral range: **{current_nm_per_pix * camera_pixels:.2f} nm**")
     except ValueError as e:
         st.error(str(e))
 
