@@ -406,7 +406,7 @@ with st.sidebar:
             "Input beam diameter (mm)",
             min_value=1.0,
             max_value=200.0,
-            value=25.0,
+            value=3.0,
             step=1.0,
             key="beam_width_oa",
         )
@@ -501,7 +501,7 @@ with st.sidebar:
             "Input beam diameter (mm)",
             min_value=1.0,
             max_value=200.0,
-            value=25.0,
+            value=3.0,
             step=1.0,
             key="beam_width_sw",
         )
@@ -762,7 +762,7 @@ if page == "Output Angle":
             with r1:
                 st.info(f"Sensor-limited (Nyquist): **{_fmt(sensor_res_nm)}**")
             with r2:
-                st.info(f"Diffraction-limited: **{_fmt(diff_res_nm)}**  ·  footprint **{grating_footprint_mm:.1f} mm**")
+                st.info(f"Diffraction-limited: **{_fmt(diff_res_nm)}**  ·  beam footprint **{grating_footprint_mm:.1f} mm**")
             with r3:
                 if sensor_res_nm >= diff_res_nm:
                     st.warning("Bottleneck: **sensor** (pixel size)")
@@ -796,10 +796,10 @@ if page == "Output Angle":
             betas.append(np.nan)
             nm_per_pixel_values.append(np.nan)
 
-    with plt.rc_context({"font.size": 10}):
-        fig = Figure(figsize=(10, 4.5), facecolor=PLOT_BG)
+    with plt.rc_context({"font.size": 13}):
+        fig = Figure(figsize=(10, 4.5), dpi=360, facecolor=PLOT_BG)
         ax = fig.add_subplot(111, facecolor=PLOT_SURFACE)
-        ax.tick_params(colors=PLOT_AXIS, which="both", labelsize=10)
+        ax.tick_params(colors=PLOT_AXIS, which="both", labelsize=13)
         for spine in ax.spines.values():
             spine.set_color("white")
 
@@ -853,7 +853,7 @@ if page == "Output Angle":
                         f"Littrow\nα={alpha_littrow:.1f}°",
                         ha="center",
                         va="top",
-                        fontsize=10,
+                        fontsize=13,
                         color="#111111",
                         fontweight="bold",
                         bbox=dict(
@@ -865,21 +865,21 @@ if page == "Output Angle":
             except:
                 pass
 
-        ax.set_xlabel("Incident Angle α (°)", fontsize=11, color=PLOT_AXIS)
-        ax.set_ylabel("Output Angle β (°)", fontsize=11, color=PLOT_AXIS)
+        ax.set_xlabel("Incident Angle α (°)", fontsize=13, color=PLOT_AXIS)
+        ax.set_ylabel("Output Angle β (°)", fontsize=13, color=PLOT_AXIS)
         ax.set_title(
             f"Output Angle vs Incident Angle  ·  {int(lines_per_mm)} lines/mm"
             f"  ·  λ={wavelength_nm:.0f} nm  ·  m={order_m}",
-            fontsize=12,
+            fontsize=14,
             fontweight="bold",
             color=PLOT_AXIS,
         )
         ax.grid(True, alpha=0.3, linestyle="--", color=PLOT_GRID)
-        ax.legend(loc="best", fontsize=9)
+        ax.legend(loc="best", fontsize=13)
 
         cbar = fig.colorbar(scatter, ax=ax)
-        cbar.set_label("nm/pixel", color=PLOT_AXIS, fontsize=10)
-        cbar.ax.tick_params(labelsize=9, colors=PLOT_AXIS)
+        cbar.set_label("nm/pixel", color=PLOT_AXIS, fontsize=13)
+        cbar.ax.tick_params(labelsize=13, colors=PLOT_AXIS)
         cbar.outline.set_edgecolor(PLOT_AXIS)
 
         st.pyplot(fig, use_container_width=True)
@@ -951,7 +951,7 @@ elif page == "Sampling Sweep":
         with _sw_r1:
             st.info(f"Sensor-limited (Nyquist): **{_fmt_sw(sensor_res_nm_sw)}**")
         with _sw_r2:
-            st.info(f"Diffraction-limited: **{_fmt_sw(diff_res_nm_sw)}**  ·  footprint **{grating_footprint_mm_sw:.1f} mm**")
+            st.info(f"Diffraction-limited: **{_fmt_sw(diff_res_nm_sw)}**  ·  beam footprint **{grating_footprint_mm_sw:.1f} mm**")
     except ValueError as e:
         st.error(str(e))
 
@@ -987,10 +987,10 @@ elif page == "Sampling Sweep":
         except:
             y_values.append(np.nan)
 
-    with plt.rc_context({"font.size": 10}):
-        fig = Figure(figsize=(10, 4.5), facecolor=PLOT_BG)
+    with plt.rc_context({"font.size": 13}):
+        fig = Figure(figsize=(10, 4.5), dpi=360, facecolor=PLOT_BG)
         ax = fig.add_subplot(111, facecolor=PLOT_SURFACE)
-        ax.tick_params(colors=PLOT_AXIS, which="both", labelsize=10)
+        ax.tick_params(colors=PLOT_AXIS, which="both", labelsize=13)
         for spine in ax.spines.values():
             spine.set_color("white")
 
@@ -1022,17 +1022,17 @@ elif page == "Sampling Sweep":
         except:
             pass
 
-        ax.set_xlabel(sweep_param, fontsize=11, color=PLOT_AXIS)
-        ax.set_ylabel("nm/pixel", fontsize=11, color=PLOT_AXIS)
+        ax.set_xlabel(sweep_param, fontsize=13, color=PLOT_AXIS)
+        ax.set_ylabel("nm/pixel", fontsize=13, color=PLOT_AXIS)
         ax.set_title(
             f"Spectral Sampling vs {sweep_param}  ·  {int(lines_per_mm_sw)} lines/mm"
             f"  ·  α={alpha_deg_sw}°  ·  λ={wavelength_nm_sw:.0f} nm  ·  f={focal_length_mm_sw:.0f} mm",
-            fontsize=12,
+            fontsize=14,
             fontweight="bold",
             color=PLOT_AXIS,
         )
         ax.grid(True, alpha=0.3, linestyle="--", color=PLOT_GRID)
-        ax.legend(loc="best", fontsize=9)
+        ax.legend(loc="best", fontsize=13)
 
         st.pyplot(fig, use_container_width=True)
 
