@@ -403,7 +403,7 @@ with st.sidebar:
             key="focal_length_oa",
         )
         beam_width_mm = st.number_input(
-            "Beam width on grating (mm)",
+            "Input beam diameter (mm)",
             min_value=1.0,
             max_value=200.0,
             value=25.0,
@@ -498,7 +498,7 @@ with st.sidebar:
             key="focal_length_sw",
         )
         beam_width_mm_sw = st.number_input(
-            "Beam width on grating (mm)",
+            "Input beam diameter (mm)",
             min_value=1.0,
             max_value=200.0,
             value=25.0,
@@ -753,15 +753,16 @@ if page == "Output Angle":
                 st.info(f"Spectral sampling: **{nm_per_pix:.4f} nm/pixel**")
             with c3:
                 st.info(f"Spectral range: **{nm_per_pix * camera_pixels:.2f} nm**")
+            grating_footprint_mm = beam_width_mm / np.cos(np.radians(alpha_deg))
             sensor_res_nm = 2.0 * nm_per_pix
-            diff_res_nm = wavelength_nm / (abs(order_m) * lines_per_mm * beam_width_mm)
+            diff_res_nm = wavelength_nm / (abs(order_m) * lines_per_mm * grating_footprint_mm)
             r1, r2, r3 = st.columns(3)
             def _fmt(v):
                 return f"{v * 1000:.1f} pm" if v < 1.0 else f"{v:.3f} nm"
             with r1:
                 st.info(f"Sensor-limited (Nyquist): **{_fmt(sensor_res_nm)}**")
             with r2:
-                st.info(f"Diffraction-limited: **{_fmt(diff_res_nm)}**")
+                st.info(f"Diffraction-limited: **{_fmt(diff_res_nm)}**  ·  footprint **{grating_footprint_mm:.1f} mm**")
             with r3:
                 if sensor_res_nm >= diff_res_nm:
                     st.warning("Bottleneck: **sensor** (pixel size)")
@@ -936,8 +937,9 @@ elif page == "Sampling Sweep":
             st.success(f"Current: **{current_nm_per_pix:.4f} nm/pixel**")
         with _sw_c2:
             st.info(f"Spectral range: **{current_nm_per_pix * camera_pixels:.2f} nm**")
+        grating_footprint_mm_sw = beam_width_mm_sw / np.cos(np.radians(alpha_deg_sw))
         sensor_res_nm_sw = 2.0 * current_nm_per_pix
-        diff_res_nm_sw = wavelength_nm_sw / (abs(order_m_sw) * lines_per_mm_sw * beam_width_mm_sw)
+        diff_res_nm_sw = wavelength_nm_sw / (abs(order_m_sw) * lines_per_mm_sw * grating_footprint_mm_sw)
         def _fmt_sw(v):
             return f"{v * 1000:.1f} pm" if v < 1.0 else f"{v:.3f} nm"
         with _sw_c3:
@@ -949,7 +951,7 @@ elif page == "Sampling Sweep":
         with _sw_r1:
             st.info(f"Sensor-limited (Nyquist): **{_fmt_sw(sensor_res_nm_sw)}**")
         with _sw_r2:
-            st.info(f"Diffraction-limited: **{_fmt_sw(diff_res_nm_sw)}**")
+            st.info(f"Diffraction-limited: **{_fmt_sw(diff_res_nm_sw)}**  ·  footprint **{grating_footprint_mm_sw:.1f} mm**")
     except ValueError as e:
         st.error(str(e))
 
