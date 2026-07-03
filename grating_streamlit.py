@@ -402,6 +402,14 @@ with st.sidebar:
             step=50.0,
             key="focal_length_oa",
         )
+        beam_width_mm = st.number_input(
+            "Beam width on grating (mm)",
+            min_value=1.0,
+            max_value=200.0,
+            value=25.0,
+            step=1.0,
+            key="beam_width_oa",
+        )
         st.subheader("Plot Options")
         alpha_min = st.number_input(
             "α min (°)",
@@ -488,6 +496,14 @@ with st.sidebar:
             value=400.0,
             step=50.0,
             key="focal_length_sw",
+        )
+        beam_width_mm_sw = st.number_input(
+            "Beam width on grating (mm)",
+            min_value=1.0,
+            max_value=200.0,
+            value=25.0,
+            step=1.0,
+            key="beam_width_sw",
         )
         st.subheader("Sweep Options")
         sweep_param = st.selectbox(
@@ -737,6 +753,20 @@ if page == "Output Angle":
                 st.info(f"Spectral sampling: **{nm_per_pix:.4f} nm/pixel**")
             with c3:
                 st.info(f"Spectral range: **{nm_per_pix * camera_pixels:.2f} nm**")
+            sensor_res_nm = 2.0 * nm_per_pix
+            diff_res_nm = wavelength_nm / (abs(order_m) * lines_per_mm * beam_width_mm)
+            r1, r2, r3 = st.columns(3)
+            def _fmt(v):
+                return f"{v * 1000:.1f} pm" if v < 1.0 else f"{v:.3f} nm"
+            with r1:
+                st.info(f"Sensor-limited (Nyquist): **{_fmt(sensor_res_nm)}**")
+            with r2:
+                st.info(f"Diffraction-limited: **{_fmt(diff_res_nm)}**")
+            with r3:
+                if sensor_res_nm >= diff_res_nm:
+                    st.warning("Bottleneck: **sensor** (pixel size)")
+                else:
+                    st.warning("Bottleneck: **diffraction** (beam width)")
         except Exception as e:
             st.warning(f"Could not calculate nm/pixel: {e}")
     except ValueError as e:
@@ -901,11 +931,25 @@ elif page == "Sampling Sweep":
             m=order_m_sw,
             f=focal_length_mm_sw * 1e-3,
         )
-        _sw_c1, _sw_c2 = st.columns(2)
+        _sw_c1, _sw_c2, _sw_c3 = st.columns(3)
         with _sw_c1:
             st.success(f"Current: **{current_nm_per_pix:.4f} nm/pixel**")
         with _sw_c2:
             st.info(f"Spectral range: **{current_nm_per_pix * camera_pixels:.2f} nm**")
+        sensor_res_nm_sw = 2.0 * current_nm_per_pix
+        diff_res_nm_sw = wavelength_nm_sw / (abs(order_m_sw) * lines_per_mm_sw * beam_width_mm_sw)
+        def _fmt_sw(v):
+            return f"{v * 1000:.1f} pm" if v < 1.0 else f"{v:.3f} nm"
+        with _sw_c3:
+            if sensor_res_nm_sw >= diff_res_nm_sw:
+                st.warning("Bottleneck: **sensor**")
+            else:
+                st.warning("Bottleneck: **diffraction**")
+        _sw_r1, _sw_r2 = st.columns(2)
+        with _sw_r1:
+            st.info(f"Sensor-limited (Nyquist): **{_fmt_sw(sensor_res_nm_sw)}**")
+        with _sw_r2:
+            st.info(f"Diffraction-limited: **{_fmt_sw(diff_res_nm_sw)}**")
     except ValueError as e:
         st.error(str(e))
 
