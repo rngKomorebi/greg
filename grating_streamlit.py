@@ -46,19 +46,58 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Design tokens
-BG = "#131313"
-SIDEBAR_BG = "#1c1b1b"
-NAV_ACTIVE = "#201f1f"
-SURFACE = "#2a2a2a"
-ACCENT = "#42e5b0"
-TEXT = "#e5e2e1"
-TEXT_MUTED = "#bbcac1"
-BORDER = "#3c4a43"
-PLOT_BG = "#0e1117"
-PLOT_SURFACE = "#0e1117"
-PLOT_AXIS = "white"
-PLOT_GRID = "gray"
+def _active_theme() -> str:
+    """Return "light" or "dark" for the viewer's current Streamlit theme.
+
+    Streamlit infers this from the app background colour. The value lags by one
+    rerun immediately after the theme is flipped in the settings menu (upstream
+    issue #11920); it self-corrects on the next interaction.
+    """
+    try:
+        theme_type = st.context.theme.type
+    except Exception:  # noqa: BLE001 - no session context (bare script run)
+        return "dark"
+    return theme_type if theme_type in ("light", "dark") else "dark"
+
+
+THEME = _active_theme()
+
+# Design tokens. Every colour in the CSS, the inline HTML and the matplotlib
+# figures resolves through these names, so switching the set switches the whole
+# app. The dark values are the original palette, unchanged.
+if THEME == "light":
+    # "Precision Technical Interface" — light, lab-report aesthetic.
+    BG = "#ffffff"
+    SIDEBAR_BG = "#f2f4f6"
+    NAV_ACTIVE = "#eceef0"
+    SURFACE = "#f7f9fb"
+    ACCENT = "#10b981"
+    TEXT = "#191c1e"
+    TEXT_MUTED = "#45464d"
+    BORDER = "#e2e8f0"
+    PLOT_BG = "#ffffff"
+    PLOT_SURFACE = "#ffffff"
+    PLOT_AXIS = "#191c1e"
+    PLOT_GRID = "#c6c6cd"
+    GRID_RGB = (255, 255, 255)
+    FONT_UI = "'Hanken Grotesk', sans-serif"
+    FOCUS_RING = "rgba(16, 185, 129, 0.18)"
+else:
+    BG = "#131313"
+    SIDEBAR_BG = "#1c1b1b"
+    NAV_ACTIVE = "#201f1f"
+    SURFACE = "#2a2a2a"
+    ACCENT = "#42e5b0"
+    TEXT = "#e5e2e1"
+    TEXT_MUTED = "#bbcac1"
+    BORDER = "#3c4a43"
+    PLOT_BG = "#0e1117"
+    PLOT_SURFACE = "#0e1117"
+    PLOT_AXIS = "white"
+    PLOT_GRID = "gray"
+    GRID_RGB = (14, 17, 23)
+    FONT_UI = "'Inter', sans-serif"
+    FOCUS_RING = "rgba(163, 166, 255, 0.15)"
 
 # Camera options: display name → {pitch_um, pixels}
 CAMERAS = {
@@ -210,14 +249,48 @@ def _make_grating_diagram(
     return fig
 
 
+# Light-mode-only refinements. Empty in dark mode, so the dark stylesheet is
+# byte-for-byte what it has always been. Streamlit's own light theme already
+# gives st.info/success/warning the pale blue/green/gold semantic tints the
+# design calls for, so alerts are deliberately left alone.
+LIGHT_CSS = (
+    """
+    /* Numbers and technical values in a monospaced face so decimal points
+       line up column-wise (DESIGN.md: JetBrains Mono for data/math). */
+    [data-testid="stMetricValue"],
+    [data-testid="stMetricDelta"],
+    .stNumberInput input,
+    .stTextInput input,
+    [data-testid="stSelectbox"] > div > div,
+    [data-testid="stAlertContainer"] p,
+    [data-testid="stCaptionContainer"] p,
+    code, pre, .katex {
+        font-family: 'JetBrains Mono', monospace !important;
+    }
+    /* Section headers get the blueprint treatment. */
+    [data-testid="stSidebar"] h3 {
+        font-weight: 700 !important;
+    }
+    /* Flat, outlined "lab report" surfaces instead of shadows. */
+    [data-testid="stMetric"] {
+        box-shadow: none !important;
+    }
+    [data-testid="stMetric"]:hover {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+    }
+    """
+    if THEME == "light"
+    else ""
+)
+
 st.markdown(
     f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400;500;600;700;800;900&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
     html, body, .stApp {{
         background-color: {BG} !important;
-        font-family: 'Inter', sans-serif !important;
+        font-family: {FONT_UI} !important;
         color: {TEXT} !important;
     }}
     .main .block-container {{
@@ -227,12 +300,27 @@ st.markdown(
     }}
     h1, h2, h3, h4, h5, h6 {{
         color: {TEXT} !important;
-        font-family: 'Inter', sans-serif !important;
+        font-family: {FONT_UI} !important;
         font-weight: 800 !important;
         letter-spacing: -0.02em !important;
     }}
     p, span, label, div, .stMarkdown {{
-        font-family: 'Inter', sans-serif !important;
+        font-family: {FONT_UI} !important;
+    }}
+    /* The rule above would otherwise beat Streamlit's icon font and make the
+       Material ligature names ("light_mode", "contrast", ...) render as text. */
+    [data-testid="stIconMaterial"],
+    [data-testid="stAlertDynamicIcon"],
+    [data-testid="stExpanderIcon"],
+    [data-testid="stExpanderIconCheck"],
+    [data-testid="stExpanderIconError"],
+    [data-testid="stExpanderIconSpinner"],
+    [data-testid="stSpinnerIcon"],
+    [data-testid="stElementToolbarButtonIcon"],
+    [data-testid="stChatInputFileIconError"],
+    [data-testid="stChatInputFileIconSpinner"],
+    span[translate="no"] {{
+        font-family: 'Material Symbols Rounded' !important;
     }}
     [data-testid="stSidebar"],
     [data-testid="stSidebarContent"],
@@ -291,7 +379,7 @@ st.markdown(
     }}
     .stNumberInput input:focus, .stTextInput input:focus {{
         border-color: {ACCENT} !important;
-        box-shadow: 0 0 0 2px rgba(163, 166, 255, 0.15) !important;
+        box-shadow: 0 0 0 2px {FOCUS_RING} !important;
     }}
     [data-testid="stSelectbox"] > div > div {{
         background-color: {SURFACE} !important;
@@ -319,6 +407,7 @@ st.markdown(
     [data-testid="stSidebarCollapseButton"] {{
         display: none !important;
     }}
+    {LIGHT_CSS}
     </style>
     """,
     unsafe_allow_html=True,
@@ -328,7 +417,7 @@ st.markdown(
 with st.sidebar:
     st.markdown(
         f"""
-        <div style="padding: 1.5rem 1.5rem 0.75rem; font-family: Inter, sans-serif;">
+        <div style="padding: 1.5rem 1.5rem 0.75rem; font-family: {FONT_UI};">
             <div style="font-size: 1.4rem; font-weight: 900; color: {TEXT};
                         letter-spacing: -0.04em;">GREG</div>
             <div style="font-size: 0.6rem; color: {TEXT_MUTED}; letter-spacing: 0.2em;
@@ -1363,7 +1452,7 @@ else:
         _imgs = [Image.open(io.BytesIO(figs_png[k])) for k, *_ in _plot_meta]
         _w = max(i.width for i in _imgs)
         _h = max(i.height for i in _imgs)
-        _grid = Image.new("RGB", (_w * 2, _h * 3), (14, 17, 23))
+        _grid = Image.new("RGB", (_w * 2, _h * 3), GRID_RGB)
         for _i, _img in enumerate(_imgs):
             _grid.paste(_img, ((_i % 2) * _w, (_i // 2) * _h))
         _buf = io.BytesIO()
@@ -1396,9 +1485,9 @@ else:
 # ============================================================================
 st.markdown(
     f"""
-    <div style='text-align: center; color: {TEXT_MUTED}; padding: 2rem 0 1rem;
+    <div style="text-align: center; color: {TEXT_MUTED}; padding: 2rem 0 1rem;
                 font-size: 0.75rem; border-top: 1px solid {BORDER};
-                margin-top: 2rem; opacity: 0.6; font-family: Inter, sans-serif;'>
+                margin-top: 2rem; opacity: 0.6; font-family: {FONT_UI};">
         <strong style="color: {TEXT};">GREG</strong> &nbsp;·&nbsp;
         Grating Equation Generator
     </div>
