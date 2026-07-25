@@ -33,6 +33,7 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 from matplotlib.figure import Figure
 from PIL import Image
 
@@ -46,19 +47,104 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Design tokens
-BG = "#131313"
-SIDEBAR_BG = "#1c1b1b"
-NAV_ACTIVE = "#201f1f"
-SURFACE = "#2a2a2a"
-ACCENT = "#42e5b0"
-TEXT = "#e5e2e1"
-TEXT_MUTED = "#bbcac1"
-BORDER = "#3c4a43"
-PLOT_BG = "#0e1117"
-PLOT_SURFACE = "#0e1117"
-PLOT_AXIS = "white"
-PLOT_GRID = "gray"
+def _active_theme() -> str:
+    """Return "light" or "dark" for the viewer's current Streamlit theme.
+
+    Streamlit infers this from the app background colour, and the value lags by
+    one rerun right after the theme is flipped (upstream issue #11920). Only the
+    matplotlib figures depend on it: the CSS carries both palettes and is
+    switched in the browser, and the theme-sync script requests the one rerun
+    that brings the figures back in step.
+    """
+    try:
+        theme_type = st.context.theme.type
+    except Exception:  # noqa: BLE001 - no session context (bare script run)
+        return "dark"
+    return theme_type if theme_type in ("light", "dark") else "dark"
+
+
+THEME = _active_theme()
+
+# The hidden button the theme-sync script clicks to request a rerun.
+THEME_SYNC_KEY = "greg_theme_sync"
+THEME_SYNC_LABEL = "sync theme"
+
+# Design tokens for both themes. The stylesheet and the inline HTML reference
+# these as CSS variables (--greg-*), so a theme flip repaints the whole UI in
+# the browser with no rerun. The dark values are the original palette.
+PALETTES = {
+    "dark": {
+        "bg": "#131313",
+        "sidebar": "#1c1b1b",
+        "nav": "#201f1f",
+        "surface": "#2a2a2a",
+        "accent": "#42e5b0",
+        "text": "#e5e2e1",
+        "muted": "#bbcac1",
+        "border": "#3c4a43",
+        "font_ui": "'Inter', sans-serif",
+        "focus": "rgba(163, 166, 255, 0.15)",
+        # Matplotlib side: baked into the PNGs, so these cannot be CSS variables.
+        "plot_bg": "#0e1117",
+        "plot_surface": "#0e1117",
+        "plot_axis": "white",
+        "plot_grid": "gray",
+        "grid_rgb": (14, 17, 23),
+    },
+    # "Precision Technical Interface" — light, lab-report aesthetic.
+    "light": {
+        "bg": "#ffffff",
+        "sidebar": "#f2f4f6",
+        "nav": "#eceef0",
+        "surface": "#f7f9fb",
+        "accent": "#10b981",
+        "text": "#191c1e",
+        "muted": "#45464d",
+        "border": "#e2e8f0",
+        "font_ui": "'Hanken Grotesk', sans-serif",
+        "focus": "rgba(16, 185, 129, 0.18)",
+        "plot_bg": "#ffffff",
+        "plot_surface": "#ffffff",
+        "plot_axis": "#191c1e",
+        "plot_grid": "#c6c6cd",
+        "grid_rgb": (255, 255, 255),
+    },
+}
+
+# Python-side colours, used only where a value has to be baked in server-side:
+# the matplotlib figures and the downloaded plot grid.
+_P = PALETTES[THEME]
+ACCENT = _P["accent"]
+TEXT = _P["text"]
+TEXT_MUTED = _P["muted"]
+PLOT_BG = _P["plot_bg"]
+PLOT_SURFACE = _P["plot_surface"]
+PLOT_AXIS = _P["plot_axis"]
+PLOT_GRID = _P["plot_grid"]
+GRID_RGB = _P["grid_rgb"]
+
+# The six analysis figures are built inside analysis_core, which keeps its own
+# plot palette; point it at the active theme before anything is drawn.
+ac.set_theme(THEME)
+
+
+def _token_block(selector: str, palette: dict) -> str:
+    """Emit the --greg-* custom properties for one palette under one selector."""
+    return selector + " {\n" + "".join(
+        f"        --greg-{name}: {palette[key]};\n"
+        for name, key in (
+            ("bg", "bg"),
+            ("sidebar", "sidebar"),
+            ("nav", "nav"),
+            ("surface", "surface"),
+            ("accent", "accent"),
+            ("text", "text"),
+            ("muted", "muted"),
+            ("border", "border"),
+            ("font-ui", "font_ui"),
+            ("focus", "focus"),
+        )
+    ) + "    }"
 
 # Camera options: display name → {pitch_um, pixels}
 CAMERAS = {
@@ -210,35 +296,86 @@ def _make_grating_diagram(
     return fig
 
 
+# Light-mode-only refinements. Empty in dark mode, so the dark stylesheet is
+# byte-for-byte what it has always been. Streamlit's own light theme already
+# gives st.info/success/warning the pale blue/green/gold semantic tints the
+# design calls for, so alerts are deliberately left alone.
+LIGHT_CSS = """
+    /* Numbers and technical values in a monospaced face so decimal points
+       line up column-wise (DESIGN.md: JetBrains Mono for data/math). */
+    html[data-greg-theme="light"] [data-testid="stMetricValue"],
+    html[data-greg-theme="light"] [data-testid="stMetricDelta"],
+    html[data-greg-theme="light"] .stNumberInput input,
+    html[data-greg-theme="light"] .stTextInput input,
+    html[data-greg-theme="light"] [data-testid="stSelectbox"] > div > div,
+    html[data-greg-theme="light"] [data-testid="stAlertContainer"] p,
+    html[data-greg-theme="light"] [data-testid="stCaptionContainer"] p,
+    html[data-greg-theme="light"] code,
+    html[data-greg-theme="light"] pre,
+    html[data-greg-theme="light"] .katex {
+        font-family: 'JetBrains Mono', monospace !important;
+    }
+    /* Flat, outlined "lab report" surfaces instead of shadows. */
+    html[data-greg-theme="light"] [data-testid="stMetric"] {
+        box-shadow: none !important;
+    }
+    html[data-greg-theme="light"] [data-testid="stMetric"]:hover {
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05) !important;
+    }
+"""
+
 st.markdown(
     f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400;500;600;700;800;900&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+    /* Both palettes ship on every page load. The theme-sync script below stamps
+       data-greg-theme on <html>, so flipping the theme repaints instantly in the
+       browser instead of waiting for a rerun. The :root block is the server's
+       best guess, used for the very first paint before the script runs. */
+{_token_block("    :root", PALETTES[THEME])}
+{_token_block('    html[data-greg-theme="dark"]', PALETTES["dark"])}
+{_token_block('    html[data-greg-theme="light"]', PALETTES["light"])}
 
     html, body, .stApp {{
-        background-color: {BG} !important;
-        font-family: 'Inter', sans-serif !important;
-        color: {TEXT} !important;
+        background-color: var(--greg-bg) !important;
+        font-family: var(--greg-font-ui) !important;
+        color: var(--greg-text) !important;
     }}
     .main .block-container {{
-        background-color: {BG} !important;
+        background-color: var(--greg-bg) !important;
         padding: 2rem 2.5rem !important;
         max-width: 100% !important;
     }}
     h1, h2, h3, h4, h5, h6 {{
-        color: {TEXT} !important;
-        font-family: 'Inter', sans-serif !important;
+        color: var(--greg-text) !important;
+        font-family: var(--greg-font-ui) !important;
         font-weight: 800 !important;
         letter-spacing: -0.02em !important;
     }}
     p, span, label, div, .stMarkdown {{
-        font-family: 'Inter', sans-serif !important;
+        font-family: var(--greg-font-ui) !important;
+    }}
+    /* The rule above would otherwise beat Streamlit's icon font and make the
+       Material ligature names ("light_mode", "contrast", ...) render as text. */
+    [data-testid="stIconMaterial"],
+    [data-testid="stAlertDynamicIcon"],
+    [data-testid="stExpanderIcon"],
+    [data-testid="stExpanderIconCheck"],
+    [data-testid="stExpanderIconError"],
+    [data-testid="stExpanderIconSpinner"],
+    [data-testid="stSpinnerIcon"],
+    [data-testid="stElementToolbarButtonIcon"],
+    [data-testid="stChatInputFileIconError"],
+    [data-testid="stChatInputFileIconSpinner"],
+    span[translate="no"] {{
+        font-family: 'Material Symbols Rounded' !important;
     }}
     [data-testid="stSidebar"],
     [data-testid="stSidebarContent"],
     [data-testid="stSidebar"] .block-container {{
-        background-color: {SIDEBAR_BG} !important;
-        border-right: 1px solid {BORDER} !important;
+        background-color: var(--greg-sidebar) !important;
+        border-right: 1px solid var(--greg-border) !important;
     }}
     [data-testid="stSidebar"] .block-container {{
         padding: 0 !important;
@@ -253,7 +390,7 @@ st.markdown(
         padding: 0.65rem 1.5rem !important;
         cursor: pointer !important;
         border-left: 2px solid transparent !important;
-        color: {TEXT_MUTED} !important;
+        color: var(--greg-muted) !important;
         font-size: 0.875rem !important;
         font-weight: 500 !important;
         margin: 0 !important;
@@ -261,20 +398,20 @@ st.markdown(
         transition: all 0.15s ease !important;
     }}
     [data-testid="stSidebar"] [data-testid="stRadio"] label:hover {{
-        background-color: {NAV_ACTIVE} !important;
-        color: {TEXT} !important;
-        border-left-color: {ACCENT} !important;
+        background-color: var(--greg-nav) !important;
+        color: var(--greg-text) !important;
+        border-left-color: var(--greg-accent) !important;
     }}
     [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {{
-        background-color: {NAV_ACTIVE} !important;
-        color: {ACCENT} !important;
-        border-left: 2px solid {ACCENT} !important;
+        background-color: var(--greg-nav) !important;
+        color: var(--greg-accent) !important;
+        border-left: 2px solid var(--greg-accent) !important;
     }}
     [data-testid="stSidebar"] [data-testid="stRadio"] input[type="radio"] {{
         display: none !important;
     }}
     [data-testid="stSidebar"] h3 {{
-        color: {TEXT_MUTED} !important;
+        color: var(--greg-muted) !important;
         font-size: 0.6rem !important;
         font-weight: 700 !important;
         letter-spacing: 0.18em !important;
@@ -284,54 +421,115 @@ st.markdown(
         margin-bottom: 0.25rem !important;
     }}
     .stNumberInput input, .stTextInput input {{
-        background-color: {SURFACE} !important;
-        border: 1px solid {BORDER} !important;
-        color: {TEXT} !important;
+        background-color: var(--greg-surface) !important;
+        border: 1px solid var(--greg-border) !important;
+        color: var(--greg-text) !important;
         border-radius: 0.25rem !important;
     }}
     .stNumberInput input:focus, .stTextInput input:focus {{
-        border-color: {ACCENT} !important;
-        box-shadow: 0 0 0 2px rgba(163, 166, 255, 0.15) !important;
+        border-color: var(--greg-accent) !important;
+        box-shadow: 0 0 0 2px var(--greg-focus) !important;
     }}
     [data-testid="stSelectbox"] > div > div {{
-        background-color: {SURFACE} !important;
-        border-color: {BORDER} !important;
-        color: {TEXT} !important;
+        background-color: var(--greg-surface) !important;
+        border-color: var(--greg-border) !important;
+        color: var(--greg-text) !important;
     }}
     [data-testid="stMetric"] {{
-        background-color: {SURFACE} !important;
-        border: 1px solid {BORDER} !important;
-        border-left: 2px solid {ACCENT} !important;
+        background-color: var(--greg-surface) !important;
+        border: 1px solid var(--greg-border) !important;
+        border-left: 2px solid var(--greg-accent) !important;
         border-radius: 0.5rem !important;
         padding: 0.75rem 1rem !important;
     }}
     [data-testid="stMetricValue"], [data-testid="stMetricLabel"] {{
-        color: {TEXT} !important;
+        color: var(--greg-text) !important;
     }}
     [data-testid="stFileUploader"] {{
-        background-color: {SURFACE} !important;
-        border: 1px dashed {BORDER} !important;
+        background-color: var(--greg-surface) !important;
+        border: 1px dashed var(--greg-border) !important;
         border-radius: 0.25rem !important;
     }}
-    hr {{ border-color: {BORDER} !important; opacity: 0.4 !important; }}
+    hr {{ border-color: var(--greg-border) !important; opacity: 0.4 !important; }}
     [data-testid="collapsedControl"],
     button[kind="header"][aria-label="Close sidebar"],
     [data-testid="stSidebarCollapseButton"] {{
         display: none !important;
     }}
+    /* Off-screen rather than display:none, so a scripted click still reaches
+       React's handler. This is the hook the theme-sync script uses to request
+       one rerun when the theme changes, so the matplotlib figures follow. */
+    .st-key-{THEME_SYNC_KEY} {{
+        position: fixed !important;
+        left: -9999px !important;
+        top: 0 !important;
+        width: 1px !important;
+        height: 1px !important;
+        overflow: hidden !important;
+    }}
+{LIGHT_CSS}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+# One-shot rerun hook: the script only clicks this when it observes the theme
+# actually change, and a rerun does not change the theme, so it cannot loop.
+st.button(THEME_SYNC_LABEL, key=THEME_SYNC_KEY)
+
+components.html(
+    f"""
+    <script>
+    (function () {{
+        var pWin = window.parent, pDoc = pWin.document;
+        // Streamlit persists the user's choice here (frontend LocalStore.ACTIVE_THEME).
+        var KEY = "stActiveTheme-" + pWin.location.pathname + "-v2";
+        var media = pWin.matchMedia("(prefers-color-scheme: dark)");
+        var seen = null;
+
+        function liveTheme() {{
+            var choice = null;
+            try {{ choice = JSON.parse(pWin.localStorage.getItem(KEY)); }} catch (e) {{}}
+            if (choice === "Light") return "light";
+            if (choice === "Dark") return "dark";
+            return media.matches ? "dark" : "light";  // "System" or never set
+        }}
+
+        function sync() {{
+            var theme = liveTheme();
+            pDoc.documentElement.setAttribute("data-greg-theme", theme);
+            if (seen === null) {{ seen = theme; return; }}
+            if (theme === seen) return;
+            seen = theme;
+            // CSS has already repainted; ask for a rerun so the plots catch up.
+            var btn = pDoc.querySelector(".st-key-{THEME_SYNC_KEY} button");
+            if (!btn) {{  // fallback if the key-derived class ever changes
+                pDoc.querySelectorAll("button").forEach(function (b) {{
+                    if (!btn && b.innerText.trim() === "{THEME_SYNC_LABEL}") btn = b;
+                }});
+            }}
+            if (btn) btn.click();
+        }}
+
+        sync();
+        pWin.addEventListener("storage", sync);
+        media.addEventListener("change", sync);
+        setInterval(sync, 300);
+    }})();
+    </script>
+    """,
+    height=0,
+    scrolling=False,
+)
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown(
-        f"""
-        <div style="padding: 1.5rem 1.5rem 0.75rem; font-family: Inter, sans-serif;">
-            <div style="font-size: 1.4rem; font-weight: 900; color: {TEXT};
+        """
+        <div style="padding: 1.5rem 1.5rem 0.75rem; font-family: var(--greg-font-ui);">
+            <div style="font-size: 1.4rem; font-weight: 900; color: var(--greg-text);
                         letter-spacing: -0.04em;">GREG</div>
-            <div style="font-size: 0.6rem; color: {TEXT_MUTED}; letter-spacing: 0.2em;
+            <div style="font-size: 0.6rem; color: var(--greg-muted); letter-spacing: 0.2em;
                         text-transform: uppercase; margin-top: 0.2rem;">
                 Grating Equation Generator
             </div>
@@ -560,8 +758,10 @@ with st.sidebar:
         if uploaded_file is not None:
             st.success(f"Loaded: **{uploaded_file.name}**")
             st.caption(f"{uploaded_file.size:,} bytes")
-            # Auto-extract peak pixels from the pickled figure's legend
-            _pkl_id = f"{uploaded_file.name}_{uploaded_file.size}"
+            # Auto-extract peak pixels from the pickled figure's legend. The
+            # theme is part of the key so the rendered PNG is rebuilt when the
+            # palette changes, instead of keeping the previous theme's colours.
+            _pkl_id = f"{uploaded_file.name}_{uploaded_file.size}_{THEME}"
             if st.session_state.get("_fa_pkl_id") != _pkl_id:
                 try:
                     _px_from_legend = ac.extract_pixels_from_legend(
@@ -613,17 +813,17 @@ with st.sidebar:
             )
 
         st.markdown(
-            f"""
+            """
             <style>
-            div[data-testid="stSidebarContent"] div[data-testid="stButton"] > button {{
+            div[data-testid="stSidebarContent"] div[data-testid="stButton"] > button {
                 display: block;
                 margin: 0.4rem auto 0.2rem auto;
                 font-size: 1.15rem;
                 font-weight: 700;
-                border: 2px solid {ACCENT};
+                border: 2px solid var(--greg-accent);
                 padding: 0.45rem 2rem;
                 width: 80%;
-            }}
+            }
             </style>
             """,
             unsafe_allow_html=True,
@@ -711,16 +911,16 @@ with st.sidebar:
 # ============================================================================
 if page == "Output Angle":
     st.markdown(
-        f"""
+        """
         <div style="margin-bottom: 1.75rem;">
-            <h1 style="font-size: 2.25rem; font-weight: 900; color: {TEXT};
+            <h1 style="font-size: 2.25rem; font-weight: 900; color: var(--greg-text);
                        letter-spacing: -0.03em; margin-bottom: 0;">
                 Output Angle Analysis
             </h1>
             <div style="display: flex; align-items: center; gap: 0.75rem; margin-top: 0.6rem;">
-                <span style="height: 1px; width: 2.5rem; background: {ACCENT};
+                <span style="height: 1px; width: 2.5rem; background: var(--greg-accent);
                              display: inline-block;"></span>
-                <span style="font-size: 0.65rem; color: {TEXT_MUTED};
+                <span style="font-size: 0.65rem; color: var(--greg-muted);
                              letter-spacing: 0.2em; text-transform: uppercase;
                              font-weight: 700;">output vs incident angle analysis</span>
             </div>
@@ -886,9 +1086,9 @@ if page == "Output Angle":
 
         st.divider()
         st.markdown(
-            f"<span style='font-size:0.75rem;letter-spacing:0.12em;"
-            f"text-transform:uppercase;font-weight:700;color:{TEXT_MUTED};'>"
-            f"Geometry diagram</span>",
+            "<span style='font-size:0.75rem;letter-spacing:0.12em;"
+            "text-transform:uppercase;font-weight:700;color:var(--greg-muted);'>"
+            "Geometry diagram</span>",
             unsafe_allow_html=True,
         )
         _diag = _make_grating_diagram(alpha_deg, lines_per_mm, wavelength_nm, order_m)
@@ -901,16 +1101,16 @@ if page == "Output Angle":
 # ============================================================================
 elif page == "Sampling Sweep":
     st.markdown(
-        f"""
+        """
         <div style="margin-bottom: 1.75rem;">
-            <h1 style="font-size: 2.25rem; font-weight: 900; color: {TEXT};
+            <h1 style="font-size: 2.25rem; font-weight: 900; color: var(--greg-text);
                        letter-spacing: -0.03em; margin-bottom: 0;">
                 Sampling Sweep
             </h1>
             <div style="display: flex; align-items: center; gap: 0.75rem; margin-top: 0.6rem;">
-                <span style="height: 1px; width: 2.5rem; background: {ACCENT};
+                <span style="height: 1px; width: 2.5rem; background: var(--greg-accent);
                              display: inline-block;"></span>
-                <span style="font-size: 0.65rem; color: {TEXT_MUTED};
+                <span style="font-size: 0.65rem; color: var(--greg-muted);
                              letter-spacing: 0.2em; text-transform: uppercase;
                              font-weight: 700;">nm/pixel parametric analysis</span>
             </div>
@@ -1042,16 +1242,16 @@ elif page == "Sampling Sweep":
 # ============================================================================
 else:
     st.markdown(
-        f"""
+        """
         <div style="margin-bottom: 1.75rem;">
-            <h1 style="font-size: 2.25rem; font-weight: 900; color: {TEXT};
+            <h1 style="font-size: 2.25rem; font-weight: 900; color: var(--greg-text);
                        letter-spacing: -0.03em; margin-bottom: 0;">
                 Spectrometer Analysis
             </h1>
             <div style="display: flex; align-items: center; gap: 0.75rem; margin-top: 0.6rem;">
-                <span style="height: 1px; width: 2.5rem; background: {ACCENT};
+                <span style="height: 1px; width: 2.5rem; background: var(--greg-accent);
                              display: inline-block;"></span>
-                <span style="font-size: 0.65rem; color: {TEXT_MUTED};
+                <span style="font-size: 0.65rem; color: var(--greg-muted);
                              letter-spacing: 0.2em; text-transform: uppercase;
                              font-weight: 700;">spectral sampling, linearity and stability, resolution</span>
             </div>
@@ -1063,15 +1263,15 @@ else:
     # ── Raw pickle reference figure ──────────────────────────────────────────
     if "fa_raw_pkl_png" in st.session_state and uploaded_file is not None:
         st.markdown(
-            f"""
+            """
             <div style="margin-bottom:0.25rem;">
-                <span style="font-size:0.6rem;color:{TEXT_MUTED};
+                <span style="font-size:0.6rem;color:var(--greg-muted);
                              letter-spacing:0.15em;text-transform:uppercase;
                              font-weight:700;">Reference</span>
                 <span style="font-size:0.95rem;font-weight:700;
-                             color:{TEXT};margin-left:0.5rem;">Uploaded Figure</span>
+                             color:var(--greg-text);margin-left:0.5rem;">Uploaded Figure</span>
             </div>
-            <div style="font-size:0.72rem;color:{TEXT_MUTED};margin-bottom:0.5rem;">
+            <div style="font-size:0.72rem;color:var(--greg-muted);margin-bottom:0.5rem;">
                 Use pixel positions from this plot as reference pixels in the sidebar
             </div>
             """,
@@ -1085,7 +1285,14 @@ else:
         st.divider()
 
     # ── Run analysis on button click ─────────────────────────────────────────
-    if run_analysis_btn and uploaded_file is not None:
+    # The figures are cached as PNG bytes, so their colours are fixed at render
+    # time. A theme change therefore has to redraw them, which means re-running
+    # the analysis \u2014 there is no cheaper route back to a recoloured figure.
+    _stale_theme = (
+        "fa_figs_png" in st.session_state
+        and st.session_state.get("fa_theme") != THEME
+    )
+    if (run_analysis_btn or _stale_theme) and uploaded_file is not None:
         with st.spinner("Running spectrometer analysis\u2026"):
             try:
                 results = ac.run_neon_analysis(
@@ -1132,6 +1339,7 @@ else:
                         figs_png[key] = buf.getvalue()
                         plt.close(fig)
                 st.session_state["fa_figs_png"] = figs_png
+                st.session_state["fa_theme"] = THEME
                 st.session_state["fa_plot_errors"] = _plot_errors
                 st.session_state["fa_data"] = {
                     "matched": results["matched"],
@@ -1147,6 +1355,7 @@ else:
             except Exception as _e:
                 st.session_state["fa_error"] = str(_e)
                 st.session_state.pop("fa_figs_png", None)
+                st.session_state.pop("fa_theme", None)
                 st.session_state.pop("fa_data", None)
 
     # ── Display error if present ─────────────────────────────────────────────
@@ -1189,9 +1398,9 @@ else:
 
         # ── Combined peaks table
         st.markdown(
-            f"<span style='font-size:0.75rem;letter-spacing:0.12em;"
-            f"text-transform:uppercase;font-weight:700;color:{TEXT_MUTED};'>"
-            f"All peaks in range</span>",
+            "<span style='font-size:0.75rem;letter-spacing:0.12em;"
+            "text-transform:uppercase;font-weight:700;color:var(--greg-muted);'>"
+            "All peaks in range</span>",
             unsafe_allow_html=True,
         )
 
@@ -1241,20 +1450,20 @@ else:
         _tbl_rows.sort(key=lambda r: r[0])
 
         _th = (
-            f"background:{SURFACE};color:{TEXT_MUTED};font-size:0.72rem;"
-            f"font-weight:700;letter-spacing:0.1em;text-transform:uppercase;"
-            f"padding:0.4rem 0.8rem;border-bottom:1px solid {BORDER};"
-            f"text-align:left;"
+            "background:var(--greg-surface);color:var(--greg-muted);font-size:0.72rem;"
+            "font-weight:700;letter-spacing:0.1em;text-transform:uppercase;"
+            "padding:0.4rem 0.8rem;border-bottom:1px solid var(--greg-border);"
+            "text-align:left;"
         )
-        _td = f"padding:0.28rem 0.8rem;font-size:0.84rem;border-bottom:1px solid {BORDER};"
+        _td = "padding:0.28rem 0.8rem;font-size:0.84rem;border-bottom:1px solid var(--greg-border);"
         _html_rows = "".join(
             f"<tr>"
-            f"<td style='{_td}color:{TEXT_MUTED};'>{i}</td>"
+            f"<td style='{_td}color:var(--greg-muted);'>{i}</td>"
             f"<td style='{_td}color:{color};'>{px_str}</td>"
             f"<td style='{_td}color:{color};'>{wl_str}</td>"
             f"<td style='{_td}color:{color};font-size:0.72rem;'>{label}</td>"
-            f"<td style='{_td}color:{TEXT_MUTED};text-align:right;'>{intens_str}</td>"
-            f"<td style='{_td}color:{TEXT_MUTED};text-align:right;'>{delta_str}</td>"
+            f"<td style='{_td}color:var(--greg-muted);text-align:right;'>{intens_str}</td>"
+            f"<td style='{_td}color:var(--greg-muted);text-align:right;'>{delta_str}</td>"
             f"</tr>"
             for i, (
                 _,
@@ -1329,13 +1538,13 @@ else:
                         f"<style>"
                         f".tt-{key}{{position:relative;display:inline-block;"
                         f"cursor:help;margin-left:0.4rem;font-size:0.8rem;"
-                        f"color:{TEXT_MUTED};}}"
-                        f".tt-{key} .tt-box{{visibility:hidden;background:{SURFACE};"
-                        f"color:{TEXT};text-align:left;border-radius:4px;"
+                        f"color:var(--greg-muted);}}"
+                        f".tt-{key} .tt-box{{visibility:hidden;background:var(--greg-surface);"
+                        f"color:var(--greg-text);text-align:left;border-radius:4px;"
                         f"padding:8px 10px;position:absolute;z-index:9999;"
                         f"bottom:130%;left:50%;transform:translateX(-50%);"
                         f"width:280px;font-size:0.72rem;line-height:1.5;"
-                        f"border:1px solid {BORDER};pointer-events:none;}}"
+                        f"border:1px solid var(--greg-border);pointer-events:none;}}"
                         f".tt-{key}:hover .tt-box{{visibility:visible;}}"
                         f"</style>"
                         f'<span class="tt-{key}">ⓘ'
@@ -1345,14 +1554,14 @@ else:
                 st.markdown(
                     f"""
                     <div style="margin-bottom:0.25rem;">
-                        <span style="font-size:0.6rem;color:{TEXT_MUTED};
+                        <span style="font-size:0.6rem;color:var(--greg-muted);
                                      letter-spacing:0.15em;text-transform:uppercase;
                                      font-weight:700;">Plot {key}</span>
                         <span style="font-size:0.95rem;font-weight:700;
-                                     color:{TEXT};margin-left:0.5rem;">{title}</span>
+                                     color:var(--greg-text);margin-left:0.5rem;">{title}</span>
                         {_note_html}
                     </div>
-                    <div style="font-size:0.72rem;color:{TEXT_MUTED};
+                    <div style="font-size:0.72rem;color:var(--greg-muted);
                                 margin-bottom:0.5rem;">{caption}</div>
                     """,
                     unsafe_allow_html=True,
@@ -1363,7 +1572,7 @@ else:
         _imgs = [Image.open(io.BytesIO(figs_png[k])) for k, *_ in _plot_meta]
         _w = max(i.width for i in _imgs)
         _h = max(i.height for i in _imgs)
-        _grid = Image.new("RGB", (_w * 2, _h * 3), (14, 17, 23))
+        _grid = Image.new("RGB", (_w * 2, _h * 3), GRID_RGB)
         for _i, _img in enumerate(_imgs):
             _grid.paste(_img, ((_i % 2) * _w, (_i // 2) * _h))
         _buf = io.BytesIO()
@@ -1395,11 +1604,11 @@ else:
 # FOOTER
 # ============================================================================
 st.markdown(
-    f"""
-    <div style='text-align: center; color: {TEXT_MUTED}; padding: 2rem 0 1rem;
-                font-size: 0.75rem; border-top: 1px solid {BORDER};
-                margin-top: 2rem; opacity: 0.6; font-family: Inter, sans-serif;'>
-        <strong style="color: {TEXT};">GREG</strong> &nbsp;·&nbsp;
+    """
+    <div style="text-align: center; color: var(--greg-muted); padding: 2rem 0 1rem;
+                font-size: 0.75rem; border-top: 1px solid var(--greg-border);
+                margin-top: 2rem; opacity: 0.6; font-family: var(--greg-font-ui);">
+        <strong style="color: var(--greg-text);">GREG</strong> &nbsp;·&nbsp;
         Grating Equation Generator
     </div>
     """,
