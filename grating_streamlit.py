@@ -319,49 +319,6 @@ st.markdown(
     [data-testid="stSidebarCollapseButton"] {{
         display: none !important;
     }}
-    /* Alert / info / success / warning boxes */
-    [data-testid="stAlert"] {{
-        background-color: {SURFACE} !important;
-        border-color: {BORDER} !important;
-        color: {TEXT} !important;
-    }}
-    [data-testid="stAlert"] p, [data-testid="stAlert"] span {{
-        color: {TEXT} !important;
-    }}
-    /* Slider */
-    [data-testid="stSlider"] label, [data-testid="stSlider"] span {{
-        color: {TEXT} !important;
-    }}
-    /* Checkbox */
-    [data-testid="stCheckbox"] label, [data-testid="stCheckbox"] span {{
-        color: {TEXT} !important;
-    }}
-    /* Caption / small text */
-    [data-testid="stCaptionContainer"] p {{
-        color: {TEXT_MUTED} !important;
-    }}
-    /* Selectbox dropdown list */
-    [data-testid="stSelectboxVirtualDropdown"],
-    ul[data-testid="stSelectboxVirtualDropdown"] li {{
-        background-color: {SURFACE} !important;
-        color: {TEXT} !important;
-    }}
-    /* Top toolbar / header */
-    [data-testid="stToolbar"], header[data-testid="stHeader"] {{
-        background-color: {BG} !important;
-    }}
-    /* Number input label */
-    [data-testid="stNumberInput"] label {{
-        color: {TEXT} !important;
-    }}
-    /* File uploader text */
-    [data-testid="stFileUploader"] span, [data-testid="stFileUploader"] p {{
-        color: {TEXT} !important;
-    }}
-    /* Divider */
-    [data-testid="stDivider"] {{
-        border-color: {BORDER} !important;
-    }}
     </style>
     """,
     unsafe_allow_html=True,
