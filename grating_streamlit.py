@@ -36,6 +36,8 @@ import streamlit as st
 from matplotlib.figure import Figure
 from PIL import Image
 
+import streamlit.components.v1 as components
+
 import analysis_core as ac
 import physics_core as pc
 
@@ -215,18 +217,42 @@ st.markdown(
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400;500;600;700;800;900&display=swap');
 
+    /* ── Theme tokens: dark (default) ──────────────────────────────── */
+    html:not([data-greg-theme="light"]) {{
+        --greg-bg:         {BG};
+        --greg-sidebar:    {SIDEBAR_BG};
+        --greg-nav-active: {NAV_ACTIVE};
+        --greg-surface:    {SURFACE};
+        --greg-text:       {TEXT};
+        --greg-muted:      {TEXT_MUTED};
+        --greg-border:     {BORDER};
+        --greg-accent:     {ACCENT};
+    }}
+    /* ── Theme tokens: light ────────────────────────────────────────── */
+    html[data-greg-theme="light"] {{
+        --greg-bg:         #f5f7f9;
+        --greg-sidebar:    #ffffff;
+        --greg-nav-active: #edfaf5;
+        --greg-surface:    #ffffff;
+        --greg-text:       #1a1a2e;
+        --greg-muted:      #5a6478;
+        --greg-border:     #dde3ea;
+        --greg-accent:     {ACCENT};
+    }}
+
+    /* ── Base ───────────────────────────────────────────────────────── */
     html, body, .stApp {{
-        background-color: {BG} !important;
+        background-color: var(--greg-bg) !important;
         font-family: 'Inter', sans-serif !important;
-        color: {TEXT} !important;
+        color: var(--greg-text) !important;
     }}
     .main .block-container {{
-        background-color: {BG} !important;
+        background-color: var(--greg-bg) !important;
         padding: 2rem 2.5rem !important;
         max-width: 100% !important;
     }}
     h1, h2, h3, h4, h5, h6 {{
-        color: {TEXT} !important;
+        color: var(--greg-text) !important;
         font-family: 'Inter', sans-serif !important;
         font-weight: 800 !important;
         letter-spacing: -0.02em !important;
@@ -234,18 +260,19 @@ st.markdown(
     p, span, label, div, .stMarkdown {{
         font-family: 'Inter', sans-serif !important;
     }}
+
+    /* ── Sidebar ────────────────────────────────────────────────────── */
     [data-testid="stSidebar"],
     [data-testid="stSidebarContent"],
     [data-testid="stSidebar"] .block-container {{
-        background-color: {SIDEBAR_BG} !important;
-        border-right: 1px solid {BORDER} !important;
+        background-color: var(--greg-sidebar) !important;
+        border-right: 1px solid var(--greg-border) !important;
     }}
     [data-testid="stSidebar"] .block-container {{
         padding: 0 !important;
     }}
     [data-testid="stSidebar"] [data-testid="stRadio"] {{
-        margin: 0 !important;
-        padding: 0 !important;
+        margin: 0 !important; padding: 0 !important;
     }}
     [data-testid="stSidebar"] [data-testid="stRadio"] label {{
         display: flex !important;
@@ -253,7 +280,7 @@ st.markdown(
         padding: 0.65rem 1.5rem !important;
         cursor: pointer !important;
         border-left: 2px solid transparent !important;
-        color: {TEXT_MUTED} !important;
+        color: var(--greg-muted) !important;
         font-size: 0.875rem !important;
         font-weight: 500 !important;
         margin: 0 !important;
@@ -261,20 +288,20 @@ st.markdown(
         transition: all 0.15s ease !important;
     }}
     [data-testid="stSidebar"] [data-testid="stRadio"] label:hover {{
-        background-color: {NAV_ACTIVE} !important;
-        color: {TEXT} !important;
-        border-left-color: {ACCENT} !important;
+        background-color: var(--greg-nav-active) !important;
+        color: var(--greg-text) !important;
+        border-left-color: var(--greg-accent) !important;
     }}
     [data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {{
-        background-color: {NAV_ACTIVE} !important;
-        color: {ACCENT} !important;
-        border-left: 2px solid {ACCENT} !important;
+        background-color: var(--greg-nav-active) !important;
+        color: var(--greg-accent) !important;
+        border-left: 2px solid var(--greg-accent) !important;
     }}
     [data-testid="stSidebar"] [data-testid="stRadio"] input[type="radio"] {{
         display: none !important;
     }}
     [data-testid="stSidebar"] h3 {{
-        color: {TEXT_MUTED} !important;
+        color: var(--greg-muted) !important;
         font-size: 0.6rem !important;
         font-weight: 700 !important;
         letter-spacing: 0.18em !important;
@@ -283,88 +310,113 @@ st.markdown(
         margin-top: 1.25rem !important;
         margin-bottom: 0.25rem !important;
     }}
+
+    /* ── Inputs ─────────────────────────────────────────────────────── */
     .stNumberInput input, .stTextInput input {{
-        background-color: {SURFACE} !important;
-        border: 1px solid {BORDER} !important;
-        color: {TEXT} !important;
+        background-color: var(--greg-surface) !important;
+        border: 1px solid var(--greg-border) !important;
+        color: var(--greg-text) !important;
         border-radius: 0.25rem !important;
     }}
     .stNumberInput input:focus, .stTextInput input:focus {{
-        border-color: {ACCENT} !important;
-        box-shadow: 0 0 0 2px rgba(163, 166, 255, 0.15) !important;
+        border-color: var(--greg-accent) !important;
+        box-shadow: 0 0 0 2px rgba(66, 229, 176, 0.15) !important;
     }}
     [data-testid="stSelectbox"] > div > div {{
-        background-color: {SURFACE} !important;
-        border-color: {BORDER} !important;
-        color: {TEXT} !important;
+        background-color: var(--greg-surface) !important;
+        border-color: var(--greg-border) !important;
+        color: var(--greg-text) !important;
+    }}
+    [data-testid="stNumberInput"] label,
+    [data-testid="stTextInput"] label,
+    [data-testid="stSelectbox"] label,
+    [data-testid="stSlider"] label,
+    [data-testid="stCheckbox"] label {{
+        color: var(--greg-text) !important;
+    }}
+
+    /* ── Alerts / metrics ───────────────────────────────────────────── */
+    [data-testid="stAlert"] {{
+        background-color: var(--greg-surface) !important;
+        border-color: var(--greg-border) !important;
+    }}
+    [data-testid="stAlert"] p, [data-testid="stAlert"] span,
+    [data-testid="stAlert"] div {{
+        color: var(--greg-text) !important;
     }}
     [data-testid="stMetric"] {{
-        background-color: {SURFACE} !important;
-        border: 1px solid {BORDER} !important;
-        border-left: 2px solid {ACCENT} !important;
+        background-color: var(--greg-surface) !important;
+        border: 1px solid var(--greg-border) !important;
+        border-left: 2px solid var(--greg-accent) !important;
         border-radius: 0.5rem !important;
         padding: 0.75rem 1rem !important;
     }}
     [data-testid="stMetricValue"], [data-testid="stMetricLabel"] {{
-        color: {TEXT} !important;
+        color: var(--greg-text) !important;
     }}
+
+    /* ── Misc ───────────────────────────────────────────────────────── */
     [data-testid="stFileUploader"] {{
-        background-color: {SURFACE} !important;
-        border: 1px dashed {BORDER} !important;
+        background-color: var(--greg-surface) !important;
+        border: 1px dashed var(--greg-border) !important;
         border-radius: 0.25rem !important;
     }}
-    hr {{ border-color: {BORDER} !important; opacity: 0.4 !important; }}
+    [data-testid="stFileUploader"] span,
+    [data-testid="stFileUploader"] p {{
+        color: var(--greg-text) !important;
+    }}
+    [data-testid="stCaptionContainer"] p {{
+        color: var(--greg-muted) !important;
+    }}
+    [data-testid="stToolbar"], header[data-testid="stHeader"] {{
+        background-color: var(--greg-bg) !important;
+    }}
+    hr {{ border-color: var(--greg-border) !important; opacity: 0.4 !important; }}
     [data-testid="collapsedControl"],
     button[kind="header"][aria-label="Close sidebar"],
     [data-testid="stSidebarCollapseButton"] {{
         display: none !important;
     }}
-    /* Alert / info / success / warning boxes */
-    [data-testid="stAlert"] {{
-        background-color: {SURFACE} !important;
-        border-color: {BORDER} !important;
-        color: {TEXT} !important;
-    }}
-    [data-testid="stAlert"] p, [data-testid="stAlert"] span {{
-        color: {TEXT} !important;
-    }}
-    /* Slider */
-    [data-testid="stSlider"] label, [data-testid="stSlider"] span {{
-        color: {TEXT} !important;
-    }}
-    /* Checkbox */
-    [data-testid="stCheckbox"] label, [data-testid="stCheckbox"] span {{
-        color: {TEXT} !important;
-    }}
-    /* Caption / small text */
-    [data-testid="stCaptionContainer"] p {{
-        color: {TEXT_MUTED} !important;
-    }}
-    /* Selectbox dropdown list */
-    [data-testid="stSelectboxVirtualDropdown"],
-    ul[data-testid="stSelectboxVirtualDropdown"] li {{
-        background-color: {SURFACE} !important;
-        color: {TEXT} !important;
-    }}
-    /* Top toolbar / header */
-    [data-testid="stToolbar"], header[data-testid="stHeader"] {{
-        background-color: {BG} !important;
-    }}
-    /* Number input label */
-    [data-testid="stNumberInput"] label {{
-        color: {TEXT} !important;
-    }}
-    /* File uploader text */
-    [data-testid="stFileUploader"] span, [data-testid="stFileUploader"] p {{
-        color: {TEXT} !important;
-    }}
-    /* Divider */
-    [data-testid="stDivider"] {{
-        border-color: {BORDER} !important;
-    }}
     </style>
     """,
     unsafe_allow_html=True,
+)
+
+# Detect Streamlit's active theme (reads --background-color CSS var Streamlit sets
+# on :root) and stamps data-greg-theme on <html> so our CSS tokens switch correctly.
+components.html(
+    """
+    <script>
+    (function () {
+        function sync() {
+            try {
+                var pDoc = window.parent.document;
+                var bg = getComputedStyle(pDoc.documentElement)
+                             .getPropertyValue('--background-color').trim();
+                var theme = 'dark';
+                if (bg) {
+                    var el = pDoc.createElement('div');
+                    el.style.cssText = 'position:fixed;opacity:0;background:' + bg;
+                    pDoc.body.appendChild(el);
+                    var rgb = getComputedStyle(el).backgroundColor.match(/\\d+/g);
+                    pDoc.body.removeChild(el);
+                    if (rgb && rgb.length >= 3) {
+                        var lum = (parseInt(rgb[0]) * 299 +
+                                   parseInt(rgb[1]) * 587 +
+                                   parseInt(rgb[2]) * 114) / 1000;
+                        if (lum > 127) theme = 'light';
+                    }
+                }
+                pDoc.documentElement.setAttribute('data-greg-theme', theme);
+            } catch (e) {}
+        }
+        sync();
+        setInterval(sync, 500);
+    })();
+    </script>
+    """,
+    height=0,
+    scrolling=False,
 )
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
