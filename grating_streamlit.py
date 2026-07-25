@@ -123,6 +123,10 @@ PLOT_AXIS = _P["plot_axis"]
 PLOT_GRID = _P["plot_grid"]
 GRID_RGB = _P["grid_rgb"]
 
+# The six analysis figures are built inside analysis_core, which keeps its own
+# plot palette; point it at the active theme before anything is drawn.
+ac.set_theme(THEME)
+
 
 def _token_block(selector: str, palette: dict) -> str:
     """Emit the --greg-* custom properties for one palette under one selector."""
@@ -754,8 +758,10 @@ with st.sidebar:
         if uploaded_file is not None:
             st.success(f"Loaded: **{uploaded_file.name}**")
             st.caption(f"{uploaded_file.size:,} bytes")
-            # Auto-extract peak pixels from the pickled figure's legend
-            _pkl_id = f"{uploaded_file.name}_{uploaded_file.size}"
+            # Auto-extract peak pixels from the pickled figure's legend. The
+            # theme is part of the key so the rendered PNG is rebuilt when the
+            # palette changes, instead of keeping the previous theme's colours.
+            _pkl_id = f"{uploaded_file.name}_{uploaded_file.size}_{THEME}"
             if st.session_state.get("_fa_pkl_id") != _pkl_id:
                 try:
                     _px_from_legend = ac.extract_pixels_from_legend(
@@ -1279,7 +1285,14 @@ else:
         st.divider()
 
     # ── Run analysis on button click ─────────────────────────────────────────
-    if run_analysis_btn and uploaded_file is not None:
+    # The figures are cached as PNG bytes, so their colours are fixed at render
+    # time. A theme change therefore has to redraw them, which means re-running
+    # the analysis \u2014 there is no cheaper route back to a recoloured figure.
+    _stale_theme = (
+        "fa_figs_png" in st.session_state
+        and st.session_state.get("fa_theme") != THEME
+    )
+    if (run_analysis_btn or _stale_theme) and uploaded_file is not None:
         with st.spinner("Running spectrometer analysis\u2026"):
             try:
                 results = ac.run_neon_analysis(
@@ -1326,6 +1339,7 @@ else:
                         figs_png[key] = buf.getvalue()
                         plt.close(fig)
                 st.session_state["fa_figs_png"] = figs_png
+                st.session_state["fa_theme"] = THEME
                 st.session_state["fa_plot_errors"] = _plot_errors
                 st.session_state["fa_data"] = {
                     "matched": results["matched"],
@@ -1341,6 +1355,7 @@ else:
             except Exception as _e:
                 st.session_state["fa_error"] = str(_e)
                 st.session_state.pop("fa_figs_png", None)
+                st.session_state.pop("fa_theme", None)
                 st.session_state.pop("fa_data", None)
 
     # ── Display error if present ─────────────────────────────────────────────

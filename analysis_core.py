@@ -46,15 +46,62 @@ import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from scipy.optimize import curve_fit
 
-# ── Plot colour palette (matches GREG dark theme) ─────────────────────────────
-_C_FIG_BG = "#0e1117"
-_C_AX_BG = "#0e1117"
-_C_TEXT = "#e5e2e1"
-_C_MUTED = "#bbcac1"
-_C_ACCENT = "#42e5b0"
-_C_YELLOW = "#FFD10F"
-_C_ORANGE = "#FF8C42"
-_C_GRID = "#3c4a43"
+# ── Plot colour palettes (match the GREG UI themes) ───────────────────────────
+# The light accents are darkened relative to the dark theme's: #FFD10F and
+# #FF8C42 are thin-line colours chosen for a near-black canvas and wash out
+# badly on white.
+_PALETTES = {
+    "dark": {
+        "fig_bg": "#0e1117",
+        "ax_bg": "#0e1117",
+        "text": "#e5e2e1",
+        "muted": "#bbcac1",
+        "accent": "#42e5b0",
+        "yellow": "#FFD10F",
+        "orange": "#FF8C42",
+        "grid": "#3c4a43",
+    },
+    "light": {
+        "fig_bg": "#ffffff",
+        "ax_bg": "#ffffff",
+        "text": "#191c1e",
+        "muted": "#45464d",
+        "accent": "#10b981",
+        "yellow": "#d97706",
+        "orange": "#ea580c",
+        "grid": "#c6c6cd",
+    },
+}
+
+_C_FIG_BG = _PALETTES["dark"]["fig_bg"]
+_C_AX_BG = _PALETTES["dark"]["ax_bg"]
+_C_TEXT = _PALETTES["dark"]["text"]
+_C_MUTED = _PALETTES["dark"]["muted"]
+_C_ACCENT = _PALETTES["dark"]["accent"]
+_C_YELLOW = _PALETTES["dark"]["yellow"]
+_C_ORANGE = _PALETTES["dark"]["orange"]
+_C_GRID = _PALETTES["dark"]["grid"]
+
+
+def set_theme(theme: str = "dark") -> None:
+    """Point the plot palette at "dark" or "light"; unknown names fall back to dark.
+
+    Call this before building figures. The palette is module state, so a process
+    serving several sessions at once would share whichever theme was set last —
+    fine for a single-user app, and the alternative is threading a palette
+    argument through every plotting function.
+    """
+    global _C_FIG_BG, _C_AX_BG, _C_TEXT, _C_MUTED, _C_ACCENT, _C_YELLOW
+    global _C_ORANGE, _C_GRID
+    palette = _PALETTES.get(theme, _PALETTES["dark"])
+    _C_FIG_BG = palette["fig_bg"]
+    _C_AX_BG = palette["ax_bg"]
+    _C_TEXT = palette["text"]
+    _C_MUTED = palette["muted"]
+    _C_ACCENT = palette["accent"]
+    _C_YELLOW = palette["yellow"]
+    _C_ORANGE = palette["orange"]
+    _C_GRID = palette["grid"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -442,8 +489,8 @@ def _normalize_lines(ax: plt.Axes) -> float:
     return y_max
 
 
-def _apply_dark_style(fig: plt.Figure, *axes: plt.Axes) -> None:
-    """Apply GREG dark-theme colours to a figure and its axes in-place."""
+def _apply_theme_style(fig: plt.Figure, *axes: plt.Axes) -> None:
+    """Apply the active GREG palette to a figure and its axes in-place."""
     fig.set_facecolor(_C_FIG_BG)
     for ax in axes:
         ax.set_facecolor(_C_AX_BG)
@@ -620,7 +667,7 @@ def plot_neighbour_scales(
             ax_scale.set_ylim(*scale_ylim)
         ax_scale.set_title("Neighbour nm/px scale (midpoint between peaks)")
         ax_scale.legend(loc="best", frameon=True)
-        _apply_dark_style(fig, ax_ph, ax_scale)
+        _apply_theme_style(fig, ax_ph, ax_scale)
         fig.tight_layout()
     return fig, {"neighbour_table": table, "mean_scale_neighbours": mean_scale}
 
@@ -676,7 +723,7 @@ def plot_allpair_scales(
         if scale_ylim is not None:
             ax.set_ylim(*scale_ylim)
         ax.legend(loc="best", frameon=True)
-        _apply_dark_style(fig, ax)
+        _apply_theme_style(fig, ax)
         fig.tight_layout()
     return fig, {"all_pairs_table": table, "mean_scale_all_pairs": mean_scale}
 
@@ -717,7 +764,7 @@ def plot_scale_vs_separation(
         if scale_ylim is not None:
             ax.set_ylim(*scale_ylim)
         ax.legend(loc="best", frameon=True)
-        _apply_dark_style(fig, ax)
+        _apply_theme_style(fig, ax)
         fig.tight_layout()
     return fig, {"all_pairs_table": table, "mean_scale_all_pairs": mean_scale}
 
@@ -731,7 +778,7 @@ def plot_ideal_spectrum(
     intensities,
     sigma_px: float = 2.5,
     window: int = 12,
-    ideal_color: str = _C_ORANGE,
+    ideal_color: Optional[str] = None,
     sensor_range: Tuple[int, int] = (0, 255),
     ref_pixels=None,
 ) -> plt.Figure:
@@ -744,6 +791,9 @@ def plot_ideal_spectrum(
     -------
     fig : matplotlib Figure
     """
+    # Resolved here, not as a default, so it follows the palette set_theme picked.
+    if ideal_color is None:
+        ideal_color = _C_ORANGE
     fig = _load_pickle_fig(pkl_file)
     fig.set_size_inches(16, 10)
     with plt.rc_context({"font.size": 30}):
@@ -793,7 +843,7 @@ def plot_ideal_spectrum(
         ax.set_ylim(-0.05, 1.05)
         ax.set_title("NIST values vs measured data")
         ax.legend(loc="best", frameon=True)
-        _apply_dark_style(fig, ax)
+        _apply_theme_style(fig, ax)
         fig.tight_layout()
     return fig
 
@@ -848,7 +898,7 @@ def plot_linearity(
         ax_bot.set_xlabel("Pixel number (-)")
         ax_bot.set_ylabel(r"$\Delta\lambda$ (nm)")
         ax_bot.set_title("Residuals from linear fit")
-        _apply_dark_style(fig, ax_top, ax_bot)
+        _apply_theme_style(fig, ax_top, ax_bot)
         fig.tight_layout()
     return fig, {
         "a_nm_per_pixel": float(a),
@@ -913,7 +963,7 @@ def plot_gaussian_fit(
         _annotate_sigma_labels(ax, popt_ann, scale_nm_per_px=scale_nm_per_px)
 
         ax.set_ylim(0, max(float(np.max(y)), float(np.max(y_fit))) * 1.1)
-        _apply_dark_style(fig, ax)
+        _apply_theme_style(fig, ax)
         fig.tight_layout()
     return fig
 
@@ -931,7 +981,7 @@ def run_neon_analysis(
     ideal_pixels: Optional[List[float]] = None,
     scale_ylim=None,
     window: int = 12,
-    ideal_color: str = _C_ORANGE,
+    ideal_color: Optional[str] = None,
     full_sensor: bool = False,
 ) -> dict:
     """Run the full Neon calibration pipeline and produce all six analysis figures.
