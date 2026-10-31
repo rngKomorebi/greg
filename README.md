@@ -16,7 +16,8 @@
 - Dark theme optimized for visualization
 
 ### Sampling Sweep
-- Display spectral sampling equation: *dλ/dx = (d·cos³β)/(mf)*
+- Display spectral sampling equation: *dλ/dx = (d·cosβ)/(mf)*, or
+  *(d·cos³β)/(mf)* with the lens along the grating normal
 - Sweep parameters: focal length, groove density, wavelength, incident angle
 - Dynamic parameter ranges that adjust based on selected sweep parameter
 - Analyze spectral sampling (nm/pixel) vs system parameters
@@ -29,13 +30,43 @@
 - Match detected peaks against the built-in Neon reference spectrum (NIST)
 - Six analysis plots in a 2×3 layout:
   - **(A)** Neighbour nm/px scale vs pixel position
-  - **(B)** All-pair nm/px scale, coloured by first peak in pair
-  - **(C)** nm/px scale as a function of distance between peaks
-  - **(D)** NIST values vs measured data (normalised overlay)
-  - **(E)** Linearity — wavelength vs pixel with residuals panel
+  - **(B)** Linearity — wavelength vs pixel with residuals panel
+  - **(C)** All-pair nm/px scale, coloured by first peak in pair
+  - **(D)** nm/px scale as a function of distance between peaks
+  - **(E)** NIST values vs measured data (normalised overlay)
   - **(F)** Gaussian fit of measured peaks with per-peak σ annotation
 - Pixel-to-wavelength calibration with residuals
 - Matched peaks summary table with residual column
+
+### Resolution Model (Output Angle and Sampling Sweep, experimental)
+- Predicted line width from independent blurs added in quadrature: the
+  far field of the single-mode beam (including the grating's anamorphic
+  factor), optional extra angular blur, the pixel response, and optional
+  extra detector blur
+- Beam diameter from the collimator focal length and fibre mode-field
+  diameter; a grating narrower than the beam footprint cuts the beam
+- Line σ and FWHM in nm, resolution (larger of FWHM and 2 px), R = λ/Δλ,
+  and the limiting term
+- Resolution vs the swept parameter on Sampling Sweep
+- Camera lens axis option: along the diffracted beam (cosβ, default) or
+  along the grating normal (cos³β)
+- Editable pixel pitch and sensor size, seeded from the selected camera, to
+  project onto other cameras
+
+### Spectral Units
+- Linked wavelength / frequency / wavenumber fields with unit selectors
+- Air vs vacuum wavelengths; photon energy, period, angular frequency
+- Spectral width ↔ Δν ↔ Δν̃, resolving power, coherence time and length
+- Clickable reference lines (Neon, astronomical, lasers) and bands
+- Send a wavelength straight to Output Angle or Sampling Sweep
+
+### Data Export
+- Every page has a **Download data (CSV + JSON)** button for replotting or
+  combining runs elsewhere
+- The ZIP holds one CSV per plot, `run.json` with the inputs and results, and
+  a `README.txt`
+- Load with `pandas.read_csv("<name>.csv")` or
+  `numpy.genfromtxt("<name>.csv", delimiter=",", names=True)`
 
 ## Quick Start
 
@@ -78,10 +109,12 @@ Where:
 Spectral sampling is calculated using:
 
 ```
-dλ/dx = (d·cos³β)/(m·f)
+dλ/dx = (d·cosβ)/(m·f)
 ```
 
-Where **f** is the focal length and **x = f·tan β** is the detector position.
+Where **f** is the focal length of a camera lens pointed along the
+diffracted beam. With the lens along the grating normal (x = f·tan β) it is
+(d·cos³β)/(m·f).
 
 ## Requirements
 - Python 3.9+

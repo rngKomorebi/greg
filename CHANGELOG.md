@@ -5,6 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] - 2026-10-31
+
+### Added
+
+- **Data export on every page.** A **Download data (CSV + JSON)** button
+  saves the numbers behind the plots as a ZIP: one CSV per plot, `run.json`
+  with the inputs and results, and a `README.txt` on loading them. CSV and
+  JSON open outside Python and are safe to load, unlike a pickled figure.
+  - Output Angle: `output_angle.csv` (α, β, nm/px).
+  - Sampling Sweep: `sampling_sweep.csv` (swept parameter, nm/px).
+  - Spectrometer Analysis: the raw sensor trace, the peaks table, and
+    plots A–F (`C_D_all_pairs.csv` serves both C and D; E and F have two
+    files each). The inputs in `run.json` are the ones the analysis ran
+    with, even if the sidebar has changed since.
+- New `export_core.py` builds the ZIP. `run_neon_analysis` returns the
+  tables as `tables` (plus `peaks` and `export_errors`), computed by the
+  same helpers that draw the plots.
+- **Resolution model on Output Angle and Sampling Sweep**, labelled
+  experimental until it is checked against more measurements.
+  `physics_core.line_width_budget` predicts the line width as independent
+  blurs added in quadrature: the far field of the single-mode beam (with the
+  grating's anamorphic factor cos β / cos α), an optional extra angular blur
+  (µrad, scales with f), the pixel response (a/√12) and an optional extra
+  detector blur (µm). When the beam footprint D / cos α is wider than the
+  grating, the cut beam's far field is used, so the resolution stops
+  improving with α. The pages show line σ and FWHM in nm, the resolution
+  (larger of FWHM and the 2 px sampling limit), R = λ/Δλ, and which term
+  limits it. Sampling Sweep adds a resolution plot over the sweep, and both
+  exports carry the results.
+- New sidebar inputs for the model: camera lens axis, collimator focal
+  length and fibre mode-field diameter (beam D = 4λf/(π·MFD); defaults
+  Thorlabs PF2F63 + SM600, D ≈ 2.1 mm), grating width (25 mm),
+  microlenses, extra angular and detector blur (both 0). Cameras have a fill
+  factor (LinoSPAD2 0.58, with microlenses).
+- **Editable pixel pitch and sensor size** in the sidebar, seeded from the
+  selected camera, to project the instrument onto other cameras.
+- `physics_core.collimated_beam_diameter_mm` (fibre + collimator → beam D).
+- `scripts/resolution_vs_scale.py` fits α to measured Ne line widths
+  (2400 gr/mm / 400 mm: σ 0.79 px at 0.0191 nm/px; 2400 gr/mm / 200 mm:
+  σ 17 pm at 0.043 nm/px; 1200 gr/mm / 200 mm: σ 48 pm at 0.11 nm/px) and
+  reports the extra angular blur needed at the lab α (65° from the normal).
+  The fit gives 65.6° with almost no extra blur.
+- **Spectral Units page**, ported from Prismatic: linked wavelength /
+  frequency / wavenumber fields with unit selectors, spectrum bar, photon
+  energy, period, angular frequency, and reference tabs (Neon from greg's
+  NIST table, astronomical lines, laser lines, ultraviolet, infrared
+  and telecom bands), with full names rather than bare abbreviations.
+  - Air vs vacuum wavelengths (IAU standard formula, Morton 2000);
+    frequency and wavenumber always refer to vacuum.
+  - Spectral width at the current wavelength in nm, pm, GHz, MHz or cm⁻¹,
+    with resolving power, coherence time and coherence length; it can take
+    the resolution just computed on Output Angle or Sampling Sweep.
+  - "Use in Output Angle / Sampling Sweep" sends the air wavelength to
+    those pages and opens them.
+- Pages 1–2 show ν and ν̃ under the wavelength input. New module
+  `spectral_units.py` holds the conversions and reference data.
+- Gaussian fits keep their parameter uncertainties (`perr`), exported as
+  `sigma_px_err` / `sigma_nm_err` in `F_gaussian_peaks.csv`.
+
+### Changed
+
+- `nm_per_pixel` takes `lens_axis`: "beam" (cosβ, camera lens along the
+  diffracted beam, now the default) or "normal" (cos³β, the previous
+  behaviour, only valid for a detector centred on the grating normal).
+  Order m = 0 now raises a clear `ValueError` instead of dividing by zero.
+- The "Sensor-limited (Nyquist)" / "Diffraction-limited" cards are replaced
+  by the resolution model above.
+- `fit_gaussians` returns `(sigmas, popt, perr)`.
+
+- Downloads no longer rerun the app (`on_click="ignore"`), so
+  `requirements.txt` now needs `streamlit>=1.43.0`.
+- The peaks table above the analysis plots is built from
+  `analysis_core.peak_rows`, the same rows that go into `peaks.csv`.
+
+### Fixed
+
+- README plot list now uses the same A–F letters as the app.
+
 ## [0.0.4] - 2026-04-20
 
 ### Added

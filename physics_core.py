@@ -18,6 +18,13 @@ import math
 
 import numpy as np
 
+# FWHM of a Gaussian in units of its σ: 2·√(2 ln 2).
+FWHM_PER_SIGMA = 2.0 * math.sqrt(2.0 * math.log(2.0))
+
+
+LENS_AXIS_NORMAL = "normal"
+LENS_AXIS_BEAM = "beam"
+
 
 def nm_per_pixel(
     p: float = 26.2e-6,
@@ -26,14 +33,22 @@ def nm_per_pixel(
     lambda_nm: float = 640.0,
     m: int = 1,
     f: float = 200e-3,
+    lens_axis: str = LENS_AXIS_BEAM,
 ) -> float:
     """
     Calculate spectral sampling (nm/pixel) for a reflection grating spectrometer.
-    
-    Uses the exact mapping x = f·tan(β) for detector position, leading to the
-    dispersion relation dx/dλ = f·m / (d·cos³(β)). The spectral sampling is then
-    computed as: nm/pixel = p·d·cos³(β) / (m·f) × 10⁹
-    
+
+    With lens_axis="beam" (the default) the lens looks along the diffracted
+    beam, the usual layout, so x = f·tan(β − β₀) and at the centre of the
+    detector dx/dλ = f·m / (d·cos(β)), giving
+    nm/pixel = p·d·cos(β) / (m·f) × 10⁹.
+
+    With lens_axis="normal" the camera lens looks along the grating normal, so
+    the detector position is x = f·tan(β), giving dx/dλ = f·m / (d·cos³(β))
+    and nm/pixel = p·d·cos³(β) / (m·f) × 10⁹. Only a detector centred on the
+    normal sees this, so it differs from "beam" only where β is near zero and
+    the two agree anyway.
+
     Args:
         p: Pixel pitch in meters (default: 26.2 µm)
         lines_per_mm: Grating groove density in lines/mm (default: 1200.0)
@@ -41,18 +56,19 @@ def nm_per_pixel(
         lambda_nm: Wavelength λ in nanometers (default: 640.0)
         m: Diffraction order, typically ±1, ±2, etc. (default: 1)
         f: Focal length in meters (default: 200 mm)
-    
+        lens_axis: "beam" (cosβ) or "normal" (cos³β), see above
+
     Returns:
         Spectral sampling in nm/pixel
-    
+
     Raises:
         ValueError: If the chosen diffraction order does not exist for the given
                    combination of incident angle, wavelength, and grating parameters
                    (i.e., when |sin(β)| > 1)
-    
+
     Example:
         >>> nm_per_pixel(p=26.2e-6, lines_per_mm=1200, alpha_deg=30, lambda_nm=640)
-        0.0234
+        0.1052
     """
     d = 1e-3 / lines_per_mm  # [m]
     alpha = math.radians(alpha_deg)  # [rad]
@@ -62,8 +78,11 @@ def nm_per_pixel(
         raise ValueError(
             "Chosen order does not exist for these α, λ, and grating."
         )
+    if m == 0:
+        raise ValueError("Order m = 0 has no dispersion.")
     beta = math.asin(sin_beta)
-    nm_per_pix = (p * d * (math.cos(beta) ** 3)) / (m * f) * 1e9
+    power = 1 if lens_axis == LENS_AXIS_BEAM else 3
+    nm_per_pix = (p * d * (math.cos(beta) ** power)) / (m * f) * 1e9
     return nm_per_pix
 
 
@@ -332,3 +351,188 @@ def effective_resolution_rms(
         "resolving_power": R_effective,
         "limiting_factor": limiting,
     }
+
+
+def collimated_beam_diameter_mm(
+    collimator_f_mm: float = 10.99,
+    mfd_um: float = 4.3,
+    lambda_nm: float = 640.0,
+) -> float:
+    """
+    1/e² diameter of the beam from a single-mode fibre and a collimator.
+
+    The fibre mode is a Gaussian of 1/e² diameter MFD, so a lens of focal
+    length f_c collimates it to D = 4·λ·f_c / (π·MFD). The defaults are the
+    Thorlabs PF2F63 (f_c = 10.99 mm) with SM600 fibre (MFD ≈ 4.3 µm at
+    633 nm), giving D ≈ 2.1 mm.
+
+    Args:
+        collimator_f_mm: Collimator focal length in mm
+        mfd_um: Mode-field diameter of the fibre in µm
+        lambda_nm: Wavelength in nm
+
+    Returns:
+        Beam diameter (1/e²) in mm
+    """
+    return 4.0 * lambda_nm * 1e-6 * collimator_f_mm / (math.pi * mfd_um * 1e-3)
+
+
+def _far_field_sigma_rad(w: float, half_width: float, lam: float) -> float:
+    """
+    σ (rad) of the far field of a Gaussian beam cut off by a slit-like aperture.
+
+    w is the 1/e² radius of the beam and half_width the aperture half-width,
+    both across the beam, in the same unit as lam. Uncut, the far field is
+    Gaussian with σ = λ / (2πw). Cut, it is not (a hard edge tends to sinc²),
+    so σ is taken from the FWHM, which is what a Gaussian fit to a line follows.
+    """
+    sigma_free = lam / (2.0 * math.pi * w)
+    if half_width >= 2.5 * w:  # edge intensity below e⁻¹²·⁵: no effect
+        return sigma_free
+    u = np.linspace(0.0, half_width, 801)
+    weights = np.full(u.size, u[1] - u[0])
+    weights[[0, -1]] *= 0.5  # trapezoid rule
+    field = weights * np.exp(-((u / w) ** 2))
+
+    def intensity(theta):  # symmetric aperture: a cosine transform
+        return np.dot(field, np.cos(2.0 * np.pi * u * theta / lam)) ** 2
+
+    half = 0.5 * intensity(0.0)
+    lo, hi = 0.0, lam / half_width  # the far field is past half maximum by hi
+    for _ in range(50):
+        mid = 0.5 * (lo + hi)
+        if intensity(mid) > half:
+            lo = mid
+        else:
+            hi = mid
+    return 2.0 * lo / FWHM_PER_SIGMA
+
+
+def line_width_budget(
+    p: float = 26.2e-6,
+    lines_per_mm: float = 1200.0,
+    alpha_deg: float = 80.0,
+    lambda_nm: float = 640.0,
+    m: int = 1,
+    f: float = 200e-3,
+    beam_diameter_mm: float = 2.1,
+    pixel_width_frac: float = 1.0,
+    extra_sigma_um: float = 0.0,
+    extra_sigma_urad: float = 0.0,
+    grating_width_mm: float | None = None,
+    lens_axis: str = LENS_AXIS_BEAM,
+) -> dict:
+    """
+    Predict the width of a monochromatic line on the detector, term by term.
+
+    Independent blurs add in quadrature on the detector (σ in µm) and are then
+    converted to pixels and to wavelength with the local dispersion:
+
+        σ_x² = σ_optics² + σ_angular² + σ_pixel² + σ_extra²
+
+    σ_optics  The focused spot of a single Gaussian mode, as from a single-mode
+              fibre and collimator. The grating changes the beam width in the
+              dispersion direction by cos β / cos α (anamorphic factor), so the
+              beam leaving it has 1/e² radius w = (D/2)·cos β / cos α and its
+              far field has σ_θ = λ / (2πw). In wavelength this is
+              λ·d·cos α / (π·m·D), independent of f and of the lens axis.
+              The fibre image and the diffraction limit are the same spot here,
+              so they are not added twice. If the footprint on the grating,
+              D / cos α, overfills grating_width_mm, the beam is cut off at
+              the grating edges and σ_θ comes from the far field of the cut
+              beam instead; the resolution then stops improving with α.
+    σ_angular Extra angular spread of the beam before the camera lens
+              (collimation, flatness of the mirror and grating), σ in µrad.
+              On the detector it scales with f.
+    σ_pixel   Top-hat pixel response of width a = pixel_width_frac·p:
+              σ = a / √12. Without microlenses a ≈ √(fill factor)·p; good
+              microlenses bring it towards the full pitch.
+    σ_extra   Extra blur on the detector itself (crosstalk, timing), σ in µm;
+              it does not scale with f.
+
+    Angles become positions through the local plate scale: f with
+    lens_axis="beam", f / cos²β with "normal" (x = f·tan β).
+
+    Resolution is the larger of the line FWHM and the Nyquist sampling limit of
+    2 pixels: a line narrower than 2 pixels cannot be resolved more finely than
+    the pixel grid allows.
+
+    Args:
+        p: Pixel pitch in metres
+        lines_per_mm: Groove density in lines/mm
+        alpha_deg: Incident angle α in degrees
+        lambda_nm: Wavelength in nm
+        m: Diffraction order
+        f: Camera focal length in metres
+        beam_diameter_mm: 1/e² diameter of the collimated beam on the grating,
+            see collimated_beam_diameter_mm()
+        pixel_width_frac: Effective pixel width as a fraction of the pitch
+        extra_sigma_um: Additional blur σ on the detector in µm
+        extra_sigma_urad: Additional angular blur σ in µrad
+        grating_width_mm: Ruled width of the grating across the grooves, or
+            None for a grating large enough never to cut the beam
+        lens_axis: "beam" or "normal", as in nm_per_pixel()
+
+    Returns:
+        Dictionary with nm_per_pixel, beta_deg, anamorphic_factor,
+        footprint_mm (D / cos α on the grating), clipped (footprint wider
+        than the grating) and, for each of
+        optics / angular / pixel / extra / total, sigma_<term>_um,
+        sigma_<term>_px and sigma_<term>_nm; plus fwhm_px, fwhm_nm,
+        sampling_limit_nm (2 px), resolution_nm, resolving_power,
+        undersampled (FWHM < 2 px) and limiting ("optics", "angular",
+        "pixel", "extra" or "sampling").
+
+    Raises:
+        ValueError: If the order does not exist for these parameters.
+    """
+    beta_deg = output_angle(m, lambda_nm, lines_per_mm, alpha_deg)
+    cos_a = math.cos(math.radians(alpha_deg))
+    cos_b = math.cos(math.radians(beta_deg))
+    nm_px = abs(nm_per_pixel(p, lines_per_mm, alpha_deg, lambda_nm, m, f, lens_axis))
+    p_um = p * 1e6
+    plate_m = f if lens_axis == LENS_AXIS_BEAM else f / cos_b**2  # m per rad
+
+    footprint_mm = beam_diameter_mm / cos_a
+    w_out_mm = 0.5 * beam_diameter_mm * cos_b / cos_a
+    if grating_width_mm is None:
+        half_width_mm = math.inf
+    else:
+        half_width_mm = 0.5 * grating_width_mm * cos_b  # across the beam
+    sigma_theta = _far_field_sigma_rad(w_out_mm, half_width_mm, lambda_nm * 1e-6)
+    sigma_um = {
+        "optics": sigma_theta * plate_m * 1e6,
+        "angular": abs(extra_sigma_urad) * 1e-6 * plate_m * 1e6,
+        "pixel": pixel_width_frac * p_um / math.sqrt(12.0),
+        "extra": abs(extra_sigma_um),
+    }
+    sigma_um["total"] = math.sqrt(sum(s * s for s in sigma_um.values()))
+
+    out = {"nm_per_pixel": nm_px, "beta_deg": beta_deg,
+           "anamorphic_factor": cos_b / cos_a,
+           "footprint_mm": footprint_mm,
+           "clipped": footprint_mm > (grating_width_mm or math.inf)}
+    for term, s in sigma_um.items():
+        out[f"sigma_{term}_um"] = s
+        out[f"sigma_{term}_px"] = s / p_um
+        out[f"sigma_{term}_nm"] = s / p_um * nm_px
+
+    fwhm_px = FWHM_PER_SIGMA * out["sigma_total_px"]
+    fwhm_nm = fwhm_px * nm_px
+    sampling_nm = 2.0 * nm_px
+    resolution_nm = max(fwhm_nm, sampling_nm)
+    if fwhm_nm < sampling_nm:
+        limiting = "sampling"
+    else:
+        limiting = max(("optics", "angular", "pixel", "extra"),
+                       key=lambda t: sigma_um[t])
+    out.update(
+        fwhm_px=fwhm_px,
+        fwhm_nm=fwhm_nm,
+        sampling_limit_nm=sampling_nm,
+        resolution_nm=resolution_nm,
+        resolving_power=lambda_nm / resolution_nm,
+        undersampled=fwhm_px < 2.0,
+        limiting=limiting,
+    )
+    return out
