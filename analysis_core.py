@@ -26,8 +26,12 @@ Six plot functions — each returns a matplotlib Figure:
     plot_linearity(pixels, wavelengths_nm, ...)                       # E
     plot_gaussian_fit(x, y, popt, ...)                                  # F
 
+Export
+    peak_rows(matched, unmatched_pixels, unmatched_lines, a, b, sensor_max) → list
+
 Entry point
     run_neon_analysis(pkl_file, detected_pixels, ...) → dict
+        (its "tables" key holds the data behind every plot, for export_core)
 
 Figures are never shown (no plt.show()) and global rcParams are never mutated.
 """
@@ -149,6 +153,13 @@ def fit_gaussians(
     -------
     sigmas : 1-D array of per-peak σ values in pixels
     popt   : full parameter vector [A1, mu1, s1, …, c]
+    perr   : 1-σ uncertainties of popt, √diag(covariance); inf where the fit
+             leaves a parameter unconstrained
+
+    The model samples each Gaussian at the pixel centre. That is only accurate
+    while σ is well above half a pixel; for narrower lines the fitted σ depends
+    on where the line falls within its pixel and should not be read as the
+    optical line width.
     """
     x = np.asarray(x, float)
     y = np.asarray(y, float)
@@ -166,11 +177,12 @@ def fit_gaussians(
     lower += [-np.inf]
     upper += [np.inf]
 
-    popt, _ = curve_fit(
+    popt, pcov = curve_fit(
         _gaussian_model, x, y, p0=p0, bounds=(lower, upper), maxfev=20000
     )
+    perr = np.sqrt(np.clip(np.diag(pcov), 0.0, None))
     sigmas = np.array([popt[i + 2] for i in range(0, len(popt) - 1, 3)])
-    return sigmas, popt
+    return sigmas, popt, perr
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -466,27 +478,77 @@ def _px_to_wl(pixels, ref_pixels) -> np.ndarray:
     return a * np.asarray(pixels, float) + b
 
 
-def _normalize_lines(ax: plt.Axes) -> float:
-    """Subtract median background and normalise all lines to their joint max."""
-    all_y = [
-        v
-        for ln in ax.lines
-        for v in np.asarray(ln.get_ydata(), float).tolist()
-    ]
-    background = float(np.nanmedian(all_y)) if all_y else 0.0
+def _normalise_arrays(ys) -> Tuple[List[np.ndarray], float]:
+    """Subtract the joint median background and scale every array to the joint max.
+
+    Returns the normalised arrays (unchanged copies if the max is not positive)
+    and the max used.
+    """
+    ys = [np.asarray(y, float) for y in ys]
+    all_y = np.concatenate(ys) if ys else np.array([])
+    background = float(np.nanmedian(all_y)) if all_y.size else 0.0
     y_max = max(
-        (
-            float(np.nanmax(np.asarray(ln.get_ydata(), float) - background))
-            for ln in ax.lines
-            if np.asarray(ln.get_ydata()).size
-        ),
+        (float(np.nanmax(y - background)) for y in ys if y.size),
         default=0.0,
     )
     if y_max > 0:
-        for ln in ax.lines:
-            y = np.asarray(ln.get_ydata(), float)
-            ln.set_ydata((y - background) / y_max)
+        ys = [(y - background) / y_max for y in ys]
+    return ys, y_max
+
+
+def _normalize_lines(ax: plt.Axes) -> float:
+    """Subtract median background and normalise all lines to their joint max."""
+    normed, y_max = _normalise_arrays([ln.get_ydata() for ln in ax.lines])
+    if y_max > 0:
+        for ln, y in zip(ax.lines, normed):
+            ln.set_ydata(y)
     return y_max
+
+
+def _sensor_lines(pkl_file) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Return (x, y) of every line on the data-richest axis of a pickled figure."""
+    fig = _load_pickle_fig(pkl_file)
+    try:
+        ax = _isolate_sensor_axis(fig)
+        return [
+            (np.asarray(ln.get_xdata(), float), np.asarray(ln.get_ydata(), float))
+            for ln in ax.lines
+        ]
+    finally:
+        plt.close(fig)
+
+
+def _ideal_gaussians(
+    ideal_pixels,
+    intensities,
+    sigma_px: float,
+    window: int,
+    sensor_range: Tuple[int, int],
+) -> List[Tuple[float, float, np.ndarray, np.ndarray]]:
+    """Build the idealised Neon Gaussians drawn in the ideal-spectrum plot.
+
+    Peaks outside sensor_range are dropped; amplitudes are the line intensities
+    normalised to the strongest one kept. Returns (x0, amp, xs_px, ys) per peak,
+    sorted by pixel.
+    """
+    ideal_px = np.asarray(ideal_pixels, dtype=float)
+    amps = np.asarray(intensities, dtype=float)
+    in_range = (ideal_px >= sensor_range[0]) & (ideal_px <= sensor_range[1])
+    ideal_px, amps = ideal_px[in_range], amps[in_range]
+    amps = amps / float(np.max(amps))
+    order = np.argsort(ideal_px)
+    ideal_px, amps = ideal_px[order], amps[order]
+
+    out = []
+    for x0, amp in zip(ideal_px, amps):
+        xs_px = np.arange(
+            int(np.floor(x0 - window)),
+            int(np.ceil(x0 + window)) + 1,
+            dtype=float,
+        )
+        ys = amp * np.exp(-0.5 * ((xs_px - x0) / sigma_px) ** 2)
+        out.append((float(x0), float(amp), xs_px, ys))
+    return out
 
 
 def _apply_theme_style(fig: plt.Figure, *axes: plt.Axes) -> None:
@@ -811,24 +873,10 @@ def plot_ideal_spectrum(
             _remap_to_wavelength(ax, ref_pixels)
         _normalize_lines(ax)
 
-        # Filter ideal peaks to sensor range and normalise intensities
-        ideal_px = np.asarray(ideal_pixels, dtype=float)
-        amps = np.asarray(intensities, dtype=float)
-        in_range = (ideal_px >= sensor_range[0]) & (
-            ideal_px <= sensor_range[1]
+        gaussians = _ideal_gaussians(
+            ideal_pixels, intensities, sigma_px, window, sensor_range
         )
-        ideal_px, amps = ideal_px[in_range], amps[in_range]
-        amps = amps / float(np.max(amps))
-        order = np.argsort(ideal_px)
-        ideal_px, amps = ideal_px[order], amps[order]
-
-        for i, (x0, amp) in enumerate(zip(ideal_px, amps)):
-            xs_px = np.arange(
-                int(np.floor(x0 - window)),
-                int(np.ceil(x0 + window)) + 1,
-                dtype=float,
-            )
-            ys = amp * np.exp(-0.5 * ((xs_px - x0) / sigma_px) ** 2)
+        for i, (_, _, xs_px, ys) in enumerate(gaussians):
             xs_plot = _px_to_wl(xs_px, ref_pixels) if use_wl else xs_px
             ax.plot(
                 xs_plot,
@@ -969,6 +1017,209 @@ def plot_gaussian_fit(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Data export — the numbers behind each plot, as plain column tables
+# ─────────────────────────────────────────────────────────────────────────────
+PEAK_DETECTED = "detected"
+PEAK_NO_MATCH = "detected_no_match"
+PEAK_PREDICTED = "predicted"
+
+
+def peak_rows(
+    matched, unmatched_pixels, unmatched_lines, a, b, sensor_max
+) -> List[dict]:
+    """Every peak in the sensor range, detected or predicted, sorted by pixel.
+
+    Each row is {pixel, wavelength_nm, type, nist_intensity, delta_px}, where
+    type is PEAK_DETECTED (matched to a NIST line), PEAK_NO_MATCH (detected,
+    wavelength from the calibration) or PEAK_PREDICTED (NIST line expected
+    inside the sensor but not detected). Fields that do not apply are NaN.
+    """
+    nan = float("nan")
+    rows = [
+        {
+            "pixel": float(px),
+            "wavelength_nm": float(info["wavelength_nm"]),
+            "type": PEAK_DETECTED,
+            "nist_intensity": float(info["intensity"]),
+            "delta_px": float(info["delta_px"]),
+        }
+        for px, info in matched.items()
+    ]
+    rows += [
+        {
+            "pixel": float(px),
+            "wavelength_nm": a * float(px) + b,
+            "type": PEAK_NO_MATCH,
+            "nist_intensity": nan,
+            "delta_px": nan,
+        }
+        for px in unmatched_pixels
+    ]
+    for wl, intensity in unmatched_lines.items():
+        pred_px = (wl - b) / a
+        if 0 <= pred_px <= sensor_max:
+            rows.append(
+                {
+                    "pixel": pred_px,
+                    "wavelength_nm": float(wl),
+                    "type": PEAK_PREDICTED,
+                    "nist_intensity": float(intensity),
+                    "delta_px": nan,
+                }
+            )
+    rows.sort(key=lambda r: r["pixel"])
+    return rows
+
+
+def _rows_to_columns(rows: List[dict]) -> Dict[str, list]:
+    keys = list(rows[0]) if rows else []
+    return {k: [r[k] for r in rows] for k in keys}
+
+
+def _export_tables(
+    *,
+    pkl_file,
+    wavelengths_nm,
+    peak_pixels,
+    intensities,
+    peaks,
+    ref_pixels,
+    ideal_pixels,
+    sigma_px,
+    window,
+    sensor_range,
+    x_raw,
+    y_raw,
+    popt,
+    perr,
+    a,
+) -> Tuple[Dict[str, dict], Dict[str, str]]:
+    """Collect the data drawn in plots A–F as {name: {description, columns}}.
+
+    peak_i / peak_j are 0-based indices into the matched peaks sorted by
+    wavelength. Pixel columns are the x-data of the uploaded figure. Columns named
+    ``x_plot`` hold the x-axis greg actually draws in plots E and F: wavelength
+    from the two-point seed calibration when reference pixels are set,
+    otherwise pixel. A table that cannot be built is left out and its error is
+    returned in the second dict, so one failure does not block the rest.
+    """
+    use_wl = ref_pixels is not None and len(ref_pixels) >= 2
+
+    def x_plot(px):
+        return _px_to_wl(px, ref_pixels) if use_wl else np.asarray(px, float)
+
+    tables: Dict[str, dict] = {}
+    errors: Dict[str, str] = {}
+
+    def add(name, description, build):
+        try:
+            tables[name] = {"description": description, "columns": build()}
+        except Exception as e:  # noqa: BLE001 - reported, not raised
+            errors[name] = str(e)
+
+    def sensor():
+        x, y = max(_sensor_lines(pkl_file), key=lambda xy: xy[0].size)
+        return {"pixel": x, "counts": y}
+
+    def neighbours():
+        table = dispersion_neighbours(wavelengths_nm, peak_pixels)[0].copy()
+        table[:, :2] -= 1  # 1-based there; 0-based like the all-pairs table
+        names = ["peak_i", "peak_j", "pixel_i", "pixel_j",
+                 "wavelength_i_nm", "wavelength_j_nm", "scale_nm_per_px",
+                 "pixel_mid"]
+        return {n: table[:, k] for k, n in enumerate(names)}
+
+    def linearity():
+        order = np.argsort(np.asarray(peak_pixels, float))
+        px = np.asarray(peak_pixels, float)[order]
+        wl = np.asarray(wavelengths_nm, float)[order]
+        fa, fb = np.polyfit(px, wl, 1)
+        fit = fa * px + fb
+        return {"pixel": px, "wavelength_nm": wl, "fit_nm": fit,
+                "residual_nm": wl - fit}
+
+    def all_pairs():
+        table = dispersion_all_pairs(wavelengths_nm, peak_pixels)[0]
+        names = ["peak_i", "peak_j", "pixel_i", "pixel_j",
+                 "wavelength_i_nm", "wavelength_j_nm", "scale_nm_per_px",
+                 "pixel_mid", "distance_px"]
+        return {n: table[:, k] for k, n in enumerate(names)}
+
+    def measured_normalised():
+        lines = _sensor_lines(pkl_file)
+        normed, _ = _normalise_arrays([y for _, y in lines])
+        cols = {"line": [], "pixel": [], "x_plot": [], "intensity_norm": []}
+        for k, ((x, _), y) in enumerate(zip(lines, normed)):
+            cols["line"] += [k] * x.size
+            cols["pixel"] += x.tolist()
+            cols["x_plot"] += x_plot(x).tolist()
+            cols["intensity_norm"] += y.tolist()
+        return cols
+
+    def nist_ideal():
+        cols = {"peak": [], "ideal_pixel": [], "pixel": [], "x_plot": [],
+                "intensity_norm": []}
+        gaussians = _ideal_gaussians(
+            ideal_pixels, intensities, sigma_px, window, sensor_range
+        )
+        for k, (x0, _, xs_px, ys) in enumerate(gaussians):
+            cols["peak"] += [k] * xs_px.size
+            cols["ideal_pixel"] += [x0] * xs_px.size
+            cols["pixel"] += xs_px.tolist()
+            cols["x_plot"] += x_plot(xs_px).tolist()
+            cols["intensity_norm"] += ys.tolist()
+        return cols
+
+    def gauss_curve():
+        return {"pixel": x_raw, "x_plot": x_plot(x_raw), "counts": y_raw,
+                "fit_counts": _gaussian_model(x_raw, *popt)}
+
+    def gauss_peaks():
+        p = np.asarray(popt, float)[:-1].reshape(-1, 3)
+        e = np.asarray(perr, float)[:-1].reshape(-1, 3)
+        sigma = np.abs(p[:, 2])
+        return {"peak": np.arange(len(p)), "amplitude": p[:, 0],
+                "center_px": p[:, 1], "sigma_px": sigma,
+                "sigma_px_err": e[:, 2], "sigma_nm": sigma * abs(a),
+                "sigma_nm_err": e[:, 2] * abs(a),
+                "offset": [float(popt[-1])] * len(p)}
+
+    add("sensor_population",
+        "Raw trace from the uploaded figure (its longest line).", sensor)
+    add("peaks",
+        "All peaks in the sensor range: detected and matched, detected with "
+        "no NIST match, and NIST lines predicted but not found (the table "
+        "above the plots).", lambda: _rows_to_columns(peaks))
+    add("A_neighbour_scales",
+        "Plot A: nm/px between neighbouring matched peaks (sorted by "
+        "wavelength), drawn at pixel_mid over the sensor trace.", neighbours)
+    add("B_linearity",
+        "Plot B: matched peaks, linear fit of wavelength vs pixel and the "
+        "residuals.", linearity)
+    add("C_D_all_pairs",
+        "Plots C and D: nm/px for every pair of matched peaks. C draws "
+        "scale_nm_per_px vs pixel_mid coloured by peak_i; D draws it vs "
+        "distance_px. peak_i/peak_j index the matched peaks sorted by "
+        "wavelength, from 0.", all_pairs)
+    add("E_measured_normalised",
+        "Plot E: measured trace(s), median-subtracted and normalised to the "
+        "joint max.", measured_normalised)
+    add("E_nist_ideal",
+        "Plot E: idealised NIST Gaussians, amplitude proportional to the "
+        "NIST intensity.", nist_ideal)
+    if popt is not None and len(popt):
+        add("F_gaussian_fit",
+            "Plot F: raw trace and the multi-Gaussian fit.", gauss_curve)
+        add("F_gaussian_peaks",
+            "Plot F: fitted parameters per peak; counts = sum of amplitude * "
+            "exp(-(x-center)^2 / 2 sigma^2) + offset. *_err columns are 1-sigma "
+            "fit uncertainties. Below about 0.5 px sigma depends on where the "
+            "line falls within its pixel, so it is not the optical width.",
+            gauss_peaks)
+    return tables, errors
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 def run_neon_analysis(
@@ -1008,10 +1259,13 @@ def run_neon_analysis(
         unmatched_lines  : {wavelength_nm: intensity} for unmatched Neon lines
         calibration      : {a_nm_per_pixel, b_nm}
         ideal_pixels_used: list
-        gauss_fit        : {sigmas_px, popt}
+        gauss_fit        : {sigmas_px, popt, perr}
         figs             : {A, B, C, D, E, F}  — matplotlib Figure objects
         stats            : {mean_scale_neighbours, mean_scale_all_pairs,
                             a_nm_per_pixel, b_nm}
+        peaks            : peak_rows() — every peak in the sensor range
+        tables           : {name: {description, columns}} — data behind the plots
+        export_errors    : {name: message} for tables that could not be built
     """
     if reference_spectrum is None:
         reference_spectrum = NEON_REFERENCE_SPECTRUM
@@ -1051,9 +1305,9 @@ def run_neon_analysis(
 
     # ── 3. Fit Gaussians to the raw sensor data ───────────────────────────────
     _gauss_ok = False
-    x_raw = y_raw = popt = None
+    x_raw = y_raw = popt = perr = None
     sigmas_px = np.full(len(peak_pixels), float("nan"))
-    _gauss_fit: dict = {"sigmas_px": sigmas_px.tolist(), "popt": []}
+    _gauss_fit: dict = {"sigmas_px": sigmas_px.tolist(), "popt": [], "perr": []}
     _gauss_error: Optional[str] = None
     try:
         raw_fig = _load_pickle_fig(pkl_file)
@@ -1072,8 +1326,12 @@ def run_neon_analysis(
         x_raw = np.asarray(ln.get_xdata(), float)
         y_raw = np.asarray(ln.get_ydata(), float)
         plt.close(raw_fig)
-        sigmas_px, popt = fit_gaussians(x_raw, y_raw, peak_pixels)
-        _gauss_fit = {"sigmas_px": sigmas_px.tolist(), "popt": popt.tolist()}
+        sigmas_px, popt, perr = fit_gaussians(x_raw, y_raw, peak_pixels)
+        _gauss_fit = {
+            "sigmas_px": sigmas_px.tolist(),
+            "popt": popt.tolist(),
+            "perr": perr.tolist(),
+        }
         _gauss_ok = True
     except Exception as _e:
         _gauss_error = str(_e)
@@ -1166,7 +1424,32 @@ def run_neon_analysis(
         figs["F"] = None
         plot_errors["F"] = _gauss_error or "Gaussian fit failed"
 
+    # ── 5. The numbers behind the plots, for export ──────────────────────────
+    peaks = peak_rows(
+        matched, unmatched_pixels, unmatched_lines, a, b, sensor_range[1]
+    )
+    tables, export_errors = _export_tables(
+        pkl_file=pkl_file,
+        wavelengths_nm=wavelengths_nm,
+        peak_pixels=peak_pixels,
+        intensities=intensities,
+        peaks=peaks,
+        ref_pixels=ref_pixels,
+        ideal_pixels=ideal_pixels,
+        sigma_px=sigma_px,
+        window=window,
+        sensor_range=sensor_range,
+        x_raw=x_raw,
+        y_raw=y_raw,
+        popt=popt if _gauss_ok else None,
+        perr=perr if _gauss_ok else None,
+        a=a,
+    )
+
     return {
+        "peaks": peaks,
+        "tables": tables,
+        "export_errors": export_errors,
         "matched": matched,
         "unmatched_pixels": unmatched_pixels,
         "unmatched_lines": unmatched_lines,

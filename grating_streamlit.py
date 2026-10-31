@@ -12,6 +12,8 @@ Features:
       parameters (focal length, groove density, wavelength, incident angle)
     - File Analysis: Upload and analyze data files with multi-plot visualization
       and statistical analysis
+    - Spectral Units: wavelength / frequency / wavenumber converter with air vs
+      vacuum, spectral widths and coherence time (ported from Prismatic)
 
 Usage:
     Run with: streamlit run grating_streamlit.py
@@ -38,7 +40,9 @@ from matplotlib.figure import Figure
 from PIL import Image
 
 import analysis_core as ac
+import export_core as ec
 import physics_core as pc
+import spectral_units as su
 
 # Page configuration
 st.set_page_config(
@@ -146,12 +150,315 @@ def _token_block(selector: str, palette: dict) -> str:
         )
     ) + "    }"
 
-# Camera options: display name → {pitch_um, pixels}
+# Camera presets: display name → {pitch_um, pixels, fill_factor, microlenses,
+# extra_sigma_um}. Pitch and pixel count seed editable sidebar fields, so
+# other cameras can be projected. fill_factor is the light-sensitive fraction
+# of the pixel area; with microlenses the effective pixel width is taken as
+# the full pitch. extra_sigma_um is the default detector blur of the
+# resolution model.
 CAMERAS = {
-    "LinoSPAD2 (26.2 µm)": {"pitch_um": 26.2, "pixels": 256},
-    "Timepix3 (55 µm)": {"pitch_um": 55.0, "pixels": 256},
-    "Moravian CMOS (3.45 µm)": {"pitch_um": 3.45, "pixels": 8336},
+    # Measured Ne line σ: 0.79 px at 2400 gr/mm / 400 mm (0.015 nm,
+    # 0.0191 nm/px) and 0.44 px at 1200 gr/mm / 200 mm (0.048 nm,
+    # 0.11 nm/px), 640 nm. The beam's own diffraction (2.1 mm beam) explains
+    # both at α ≈ 65°; at α ≈ 80° both need ≈ 40 µrad of extra angular blur,
+    # i.e. a blur that scales with f, not one on the detector. Until α is
+    # measured the detector blur stays at zero.
+    "LinoSPAD2 (26.2 µm)": {"pitch_um": 26.2, "pixels": 256,
+                            "fill_factor": 0.58, "microlenses": True,
+                            "extra_sigma_um": 0.0},
+    "Timepix3 (55 µm)": {"pitch_um": 55.0, "pixels": 256,
+                         "fill_factor": 1.0, "microlenses": False,
+                         "extra_sigma_um": 0.0},
+    "Moravian CMOS (3.45 µm)": {"pitch_um": 3.45, "pixels": 8336,
+                                "fill_factor": 1.0, "microlenses": True,
+                                "extra_sigma_um": 0.0},
 }
+
+PAGES = ["Output Angle", "Sampling Sweep", "Spectrometer Analysis", "Spectral Units"]
+
+# Wavelength inputs on pages 1 and 2. Their defaults are seeded through session
+# state rather than value=, so the Spectral Units page can set them too
+# (Streamlit warns when a widget gets both a value= and a session-state value).
+WAVELENGTH_KEYS = {"Output Angle": "wavelength_oa", "Sampling Sweep": "wavelength_sw"}
+WAVELENGTH_MIN_NM, WAVELENGTH_MAX_NM = 300.0, 1000.0
+for _k in WAVELENGTH_KEYS.values():
+    st.session_state.setdefault(_k, 650.0)
+
+LENS_AXIS_OPTIONS = {
+    "Diffracted beam (cosβ)": pc.LENS_AXIS_BEAM,
+    "Grating normal (cos³β)": pc.LENS_AXIS_NORMAL,
+}
+
+
+def _optics_inputs(suffix: str, lambda_nm: float) -> tuple[dict, dict]:
+    """Sidebar inputs for the resolution model, shared by pages 1 and 2.
+
+    Returns the keyword arguments for physics_core.line_width_budget and, for
+    the data export, the fibre and collimator the beam diameter came from.
+    """
+    st.subheader("Resolution Model (experimental)")
+    lens_axis = LENS_AXIS_OPTIONS[
+        st.selectbox(
+            "Camera lens axis",
+            list(LENS_AXIS_OPTIONS),
+            index=0,
+            key=f"lens_axis_{suffix}",
+            help="Direction the camera lens points. Along the diffracted beam "
+            "(the usual layout) the dispersion goes as cosβ; along the grating "
+            "normal the detector position is x = f·tanβ, so it goes as cos³β. "
+            "Check against a measured nm/px.",
+        )
+    ]
+    collimator_f_mm = st.number_input(
+        "Collimator focal length (mm)",
+        min_value=0.1,
+        max_value=1000.0,
+        value=10.99,
+        step=0.1,
+        format="%.2f",
+        key=f"collimator_f_{suffix}",
+        help="Fibre collimator that makes the beam on the grating. Default: "
+        "Thorlabs PF2F63 (10.99 mm).",
+    )
+    mfd_um = st.number_input(
+        "Fibre mode-field diameter (µm)",
+        min_value=0.5,
+        max_value=100.0,
+        value=4.3,
+        step=0.1,
+        format="%.2f",
+        key=f"mfd_{suffix}",
+        help="Mode-field diameter of the single-mode fibre near the working "
+        "wavelength. Default: SM600 (P1-630A), 4.3 µm at 633 nm, specified "
+        "3.6–5.3 µm.",
+    )
+    beam_diameter_mm = pc.collimated_beam_diameter_mm(
+        collimator_f_mm, mfd_um, lambda_nm
+    )
+    st.caption(
+        f"Beam on the grating: D = 4λf/(π·MFD) = **{beam_diameter_mm:.2f} mm** "
+        "(1/e²), held at this value in a λ sweep."
+    )
+    grating_width_mm = st.number_input(
+        "Grating width (mm)",
+        min_value=1.0,
+        max_value=1000.0,
+        value=25.0,
+        step=1.0,
+        key=f"grating_width_{suffix}",
+        help="Ruled width across the grooves. When the beam footprint D/cosα "
+        "is wider, the grating edges cut the beam and the resolution stops "
+        "improving with α.",
+    )
+    microlenses = st.checkbox(
+        "Microlenses (pixel width = pitch)",
+        value=_cam["microlenses"],
+        key=f"microlenses_{suffix}_{selected_camera}",
+        help=f"Fill factor {_cam['fill_factor']:.0%}. Without microlenses the "
+        "light-sensitive width is taken as √(fill factor) × pitch.",
+    )
+    extra_sigma_urad = st.number_input(
+        "Extra angular blur σ (µrad)",
+        min_value=0.0,
+        max_value=10000.0,
+        value=0.0,
+        step=5.0,
+        key=f"extra_sigma_urad_{suffix}",
+        help="Angular spread the ideal beam does not have (collimation, "
+        "mirror and grating flatness). On the detector it scales with f. "
+        "Zero gives the ideal instrument.",
+    )
+    extra_sigma_um = st.number_input(
+        "Extra detector blur σ (µm)",
+        min_value=0.0,
+        max_value=1000.0,
+        value=_cam["extra_sigma_um"],
+        step=1.0,
+        key=f"extra_sigma_{suffix}_{selected_camera}",
+        help="Blur on the detector itself (crosstalk, timing); it does not "
+        "scale with f. Zero gives the ideal instrument.",
+    )
+    optics = {
+        "lens_axis": lens_axis,
+        "beam_diameter_mm": beam_diameter_mm,
+        "grating_width_mm": grating_width_mm,
+        "pixel_width_frac": 1.0 if microlenses else _cam["fill_factor"] ** 0.5,
+        "extra_sigma_urad": extra_sigma_urad,
+        "extra_sigma_um": extra_sigma_um,
+    }
+    beam_source = {"collimator_f_mm": collimator_f_mm, "mfd_um": mfd_um}
+    return optics, beam_source
+
+
+def _fmt_nm(v: float) -> str:
+    return f"{v:.3g} nm"
+
+
+def _show_resolution(budget: dict, source: str) -> None:
+    """Resolution cards for pages 1 and 2, from physics_core.line_width_budget.
+
+    Also remembers the result so the Spectral Units page can offer it as a
+    spectral width.
+    """
+    b = budget
+    st.session_state["_last_resolution"] = (b["resolution_nm"], source)
+    st.caption(
+        "**Experimental:** the resolution projection is still being checked "
+        "against measured Ne line widths. Treat it as an estimate."
+    )
+    r1, r2, r3 = st.columns(3)
+    with r1:
+        st.info(
+            f"Line σ: **{_fmt_nm(b['sigma_total_nm'])}**  ·  FWHM "
+            f"**{_fmt_nm(b['fwhm_nm'])}**"
+        )
+    with r2:
+        st.info(
+            f"Resolution: **{_fmt_nm(b['resolution_nm'])}**  ·  "
+            f"R = λ/Δλ ≈ **{b['resolving_power']:,.0f}**"
+        )
+    with r3:
+        _limit_text = {
+            "sampling": "Bottleneck: **pixel sampling** (FWHM < 2 px)",
+            "optics": "Bottleneck: **optics** (beam diffraction)",
+            "angular": "Bottleneck: **extra angular blur**",
+            "pixel": "Bottleneck: **pixel width**",
+            "extra": "Bottleneck: **extra detector blur**",
+        }
+        st.warning(_limit_text[b["limiting"]])
+    st.caption(
+        f"σ contributions: optics {_fmt_nm(b['sigma_optics_nm'])} (beam "
+        f"×{b['anamorphic_factor']:.2f} after the grating) · angular "
+        f"{_fmt_nm(b['sigma_angular_nm'])} · pixel "
+        f"{_fmt_nm(b['sigma_pixel_nm'])} · detector "
+        f"{_fmt_nm(b['sigma_extra_nm'])}, added in quadrature. Resolution is "
+        f"the larger of the FWHM and the 2-pixel sampling limit "
+        f"({_fmt_nm(b['sampling_limit_nm'])})."
+    )
+    if b["clipped"]:
+        st.caption(
+            f"The beam footprint on the grating ({b['footprint_mm']:.0f} mm) "
+            "is wider than the grating, so its edges cut the beam: a steeper "
+            "α no longer narrows the line."
+        )
+
+
+# ── Spectral Units page state ─────────────────────────────────────────────────
+# The canonical value is the vacuum wavelength in nm (su_vac_nm, not a widget),
+# so the three fields, their units and the air/vacuum choice only change how it
+# is displayed. Streamlit drops a widget's value when its page is not shown, so
+# _su_restore() puts the last values back on return; _su_save() stores them at
+# the end of every Spectral Units run.
+SU_MEDIA = ["Air (standard)", "Vacuum"]
+_SU_DEFAULTS = {
+    "su_medium": SU_MEDIA[0],
+    "su_wl_unit": "nm",
+    "su_freq_unit": "THz",
+    "su_wnum_unit": "cm⁻¹",
+    "su_width_unit": "pm",
+    "su_width": 50.0,
+}
+_SU_INIT_VAC_NM = su.air_to_vacuum(632.8)  # HeNe
+
+
+def _su_air() -> bool:
+    return st.session_state.get("su_medium", SU_MEDIA[0]) == SU_MEDIA[0]
+
+
+def _su_refresh_fields() -> None:
+    """Rewrite the three value fields from the canonical vacuum wavelength."""
+    ss = st.session_state
+    vac = ss["su_vac_nm"]
+    wl = su.vacuum_to_air(vac) if _su_air() else vac
+    ss["su_wl"] = wl / su.WL_UNITS[ss["su_wl_unit"]]
+    ss["su_freq"] = su.freq_thz(vac) / su.FREQ_UNITS[ss["su_freq_unit"]]
+    ss["su_wnum"] = su.wnum_cm(vac) / su.WNUM_UNITS[ss["su_wnum_unit"]]
+
+
+def _su_restore() -> None:
+    ss = st.session_state
+    ss.setdefault("su_vac_nm", _SU_INIT_VAC_NM)
+    for key, default in _SU_DEFAULTS.items():
+        if key not in ss:
+            ss[key] = ss.get(f"_saved_{key}", default)
+    if any(k not in ss for k in ("su_wl", "su_freq", "su_wnum")):
+        _su_refresh_fields()
+
+
+def _su_save() -> None:
+    for key in _SU_DEFAULTS:
+        st.session_state[f"_saved_{key}"] = st.session_state[key]
+
+
+def _su_set_vacuum(vac_nm: float) -> None:
+    st.session_state["su_vac_nm"] = vac_nm
+    _su_refresh_fields()
+
+
+def _su_on_wl() -> None:
+    v = st.session_state["su_wl"]
+    if v and v > 0:
+        wl = v * su.WL_UNITS[st.session_state["su_wl_unit"]]
+        _su_set_vacuum(su.air_to_vacuum(wl) if _su_air() else wl)
+
+
+def _su_on_freq() -> None:
+    v = st.session_state["su_freq"]
+    if v and v > 0:
+        _su_set_vacuum(
+            su.wl_from_freq(v * su.FREQ_UNITS[st.session_state["su_freq_unit"]])
+        )
+
+
+def _su_on_wnum() -> None:
+    v = st.session_state["su_wnum"]
+    if v and v > 0:
+        _su_set_vacuum(
+            su.wl_from_wnum(v * su.WNUM_UNITS[st.session_state["su_wnum_unit"]])
+        )
+
+
+def _su_jump(wl_nm: float, in_air: bool) -> None:
+    _su_set_vacuum(su.air_to_vacuum(wl_nm) if in_air else wl_nm)
+
+
+def _su_send(target_page: str) -> None:
+    """Put the current air wavelength into page 1 or 2 and open that page."""
+    wl_air = su.vacuum_to_air(st.session_state["su_vac_nm"])
+    st.session_state[WAVELENGTH_KEYS[target_page]] = round(wl_air, 4)
+    st.session_state["page"] = target_page
+
+
+def _su_use_width(width_nm: float) -> None:
+    st.session_state["su_width_unit"] = "pm"
+    st.session_state["su_width"] = width_nm * 1e3
+
+
+def _frequency_caption(wl_air_nm: float) -> None:
+    """Small ν / ν̃ readout under a wavelength input (λ taken as air)."""
+    wl_vac = su.air_to_vacuum(wl_air_nm)
+    st.caption(
+        f"ν = {su.freq_thz(wl_vac):.3f} THz · ν̃ = {su.wnum_cm(wl_vac):,.2f} cm⁻¹ "
+        f"(λ in air; vacuum {wl_vac:.3f} nm)"
+    )
+
+
+def _data_download_button(tables: dict, meta: dict, stem: str, key: str) -> None:
+    """Offer the data behind a page's plots as a ZIP of CSVs plus run.json.
+
+    on_click="ignore" stops the click from rerunning the app, so downloading
+    never recomputes the page.
+    """
+    st.download_button(
+        "Download data (CSV + JSON)",
+        data=ec.build_zip(tables, meta),
+        file_name=f"{stem}_greg_data.zip",
+        mime="application/zip",
+        key=key,
+        on_click="ignore",
+        help="A ZIP with one CSV per plot, run.json with the inputs and "
+        "results, and a README on loading them.",
+    )
 
 
 def _make_grating_diagram(
@@ -545,12 +852,36 @@ with st.sidebar:
         key="camera_select",
     )
     _cam = CAMERAS[selected_camera]
-    pixel_pitch_um = _cam["pitch_um"]
-    camera_pixels = _cam["pixels"]
+    # Seeded from the preset, keyed per camera so switching camera restores it
+    _pitch_col, _pixels_col = st.columns(2)
+    with _pitch_col:
+        pixel_pitch_um = st.number_input(
+            "Pixel pitch (µm)",
+            min_value=0.1,
+            max_value=1000.0,
+            value=float(_cam["pitch_um"]),
+            step=0.1,
+            format="%.2f",
+            key=f"pitch_{selected_camera}",
+            help="Centre-to-centre pixel spacing along the dispersion "
+            "direction. Change it to project to another camera.",
+        )
+    with _pixels_col:
+        camera_pixels = int(st.number_input(
+            "Sensor size (px)",
+            min_value=1,
+            max_value=100000,
+            value=int(_cam["pixels"]),
+            step=1,
+            key=f"pixels_{selected_camera}",
+            help="Number of pixels along the dispersion direction; sets the "
+            "spectral range.",
+        ))
 
     page = st.radio(
-        "",
-        ["Output Angle", "Sampling Sweep", "Spectrometer Analysis"],
+        "Page",
+        PAGES,
+        key="page",
         label_visibility="collapsed",
     )
 
@@ -578,12 +909,12 @@ with st.sidebar:
         )
         wavelength_nm = st.number_input(
             "Wavelength λ (nm)",
-            min_value=300.0,
-            max_value=1000.0,
-            value=650.0,
+            min_value=WAVELENGTH_MIN_NM,
+            max_value=WAVELENGTH_MAX_NM,
             step=1.0,
             key="wavelength_oa",
         )
+        _frequency_caption(wavelength_nm)
         order_m = st.number_input(
             "Order m",
             min_value=-5,
@@ -600,14 +931,7 @@ with st.sidebar:
             step=50.0,
             key="focal_length_oa",
         )
-        beam_width_mm = st.number_input(
-            "Input beam diameter (mm)",
-            min_value=1.0,
-            max_value=200.0,
-            value=3.0,
-            step=1.0,
-            key="beam_width_oa",
-        )
+        optics_oa, beam_source_oa = _optics_inputs("oa", wavelength_nm)
         st.subheader("Plot Options")
         alpha_min = st.number_input(
             "α min (°)",
@@ -673,12 +997,12 @@ with st.sidebar:
         )
         wavelength_nm_sw = st.number_input(
             "Wavelength λ (nm)",
-            min_value=300.0,
-            max_value=1000.0,
-            value=650.0,
+            min_value=WAVELENGTH_MIN_NM,
+            max_value=WAVELENGTH_MAX_NM,
             step=1.0,
             key="wavelength_sw",
         )
+        _frequency_caption(wavelength_nm_sw)
         order_m_sw = st.number_input(
             "Order m",
             min_value=-5,
@@ -695,14 +1019,7 @@ with st.sidebar:
             step=50.0,
             key="focal_length_sw",
         )
-        beam_width_mm_sw = st.number_input(
-            "Input beam diameter (mm)",
-            min_value=1.0,
-            max_value=200.0,
-            value=3.0,
-            step=1.0,
-            key="beam_width_sw",
-        )
+        optics_sw, beam_source_sw = _optics_inputs("sw", wavelength_nm_sw)
         st.subheader("Sweep Options")
         sweep_param = st.selectbox(
             "Sweep parameter",
@@ -747,8 +1064,26 @@ with st.sidebar:
             key="sweep_points",
         )
 
+    # Spectral Units params
+    elif page == "Spectral Units":
+        st.subheader("Wavelength Medium")
+        _su_restore()
+        st.radio(
+            "Wavelengths are given in",
+            SU_MEDIA,
+            key="su_medium",
+            on_change=_su_refresh_fields,
+            help="Frequency and wavenumber always refer to vacuum. Air means "
+            "dry standard air (15 °C, 101 325 Pa), the convention of NIST "
+            "line lists; below 200 nm only vacuum applies.",
+        )
+        st.caption(
+            "Pages 1–2 and the Neon reference use air wavelengths; laser "
+            "and astronomical lines are listed in air too."
+        )
+
     # Spectrometer Analysis params
-    else:
+    elif page == "Spectrometer Analysis":
         st.subheader("Data File")
         uploaded_file = st.file_uploader(
             "Choose a data file",
@@ -933,6 +1268,7 @@ if page == "Output Angle":
     )
 
     beta_current = None
+    budget_oa = None
     try:
         beta_current = pc.output_angle(
             order_m, wavelength_nm, int(lines_per_mm), alpha_deg
@@ -948,26 +1284,22 @@ if page == "Output Angle":
                 lambda_nm=wavelength_nm,
                 m=order_m,
                 f=focal_length_mm * 1e-3,
+                lens_axis=optics_oa["lens_axis"],
             )
             with c2:
                 st.info(f"Spectral sampling: **{nm_per_pix:.4f} nm/pixel**")
             with c3:
                 st.info(f"Spectral range: **{nm_per_pix * camera_pixels:.2f} nm**")
-            grating_footprint_mm = beam_width_mm / np.cos(np.radians(alpha_deg))
-            sensor_res_nm = 2.0 * nm_per_pix
-            diff_res_nm = wavelength_nm / (abs(order_m) * lines_per_mm * grating_footprint_mm)
-            r1, r2, r3 = st.columns(3)
-            def _fmt(v):
-                return f"{v * 1000:.1f} pm" if v < 1.0 else f"{v:.3f} nm"
-            with r1:
-                st.info(f"Sensor-limited (Nyquist): **{_fmt(sensor_res_nm)}**")
-            with r2:
-                st.info(f"Diffraction-limited: **{_fmt(diff_res_nm)}**  ·  beam footprint **{grating_footprint_mm:.1f} mm**")
-            with r3:
-                if sensor_res_nm >= diff_res_nm:
-                    st.warning("Bottleneck: **sensor** (pixel size)")
-                else:
-                    st.warning("Bottleneck: **diffraction** (beam width)")
+            budget_oa = pc.line_width_budget(
+                p=pixel_pitch_um * 1e-6,
+                lines_per_mm=lines_per_mm,
+                alpha_deg=alpha_deg,
+                lambda_nm=wavelength_nm,
+                m=order_m,
+                f=focal_length_mm * 1e-3,
+                **optics_oa,
+            )
+            _show_resolution(budget_oa, "Output Angle")
         except Exception as e:
             st.warning(f"Could not calculate nm/pixel: {e}")
     except ValueError as e:
@@ -988,6 +1320,7 @@ if page == "Output Angle":
                     lambda_nm=wavelength_nm,
                     m=order_m,
                     f=focal_length_mm * 1e-3,
+                    lens_axis=optics_oa["lens_axis"],
                 )
                 nm_per_pixel_values.append(nm_pp)
             except:
@@ -1084,6 +1417,52 @@ if page == "Output Angle":
 
         st.pyplot(fig, use_container_width=True)
 
+        try:
+            _littrow_export = pc.littrow_config(
+                order_m, wavelength_nm, int(lines_per_mm)
+            )
+        except ValueError:
+            _littrow_export = None
+        _data_download_button(
+            tables={
+                "output_angle": {
+                    "description": "Output angle and spectral sampling for "
+                    "each incident angle in the plotted range (NaN where no "
+                    "diffracted order exists).",
+                    "columns": {
+                        "alpha_deg": alphas,
+                        "beta_deg": betas,
+                        "nm_per_pixel": nm_per_pixel_values,
+                    },
+                },
+            },
+            meta={
+                "page": "Output Angle",
+                "inputs": {
+                    "camera": selected_camera,
+                    "pixel_pitch_um": pixel_pitch_um,
+                    "camera_pixels": camera_pixels,
+                    "lines_per_mm": lines_per_mm,
+                    "alpha_deg": alpha_deg,
+                    "wavelength_nm": wavelength_nm,
+                    "order_m": order_m,
+                    "focal_length_mm": focal_length_mm,
+                    **beam_source_oa,
+                    **optics_oa,
+                    "alpha_min_deg": alpha_min,
+                    "alpha_max_deg": alpha_max,
+                    "alpha_step_deg": alpha_step,
+                },
+                "results": {
+                    "beta_deg": beta_current,
+                    "littrow_alpha_deg": _littrow_export,
+                    "resolution": budget_oa,
+                },
+            },
+            stem="output_angle",
+            key="download_data_oa",
+        )
+
         st.divider()
         st.markdown(
             "<span style='font-size:0.75rem;letter-spacing:0.12em;"
@@ -1118,74 +1497,60 @@ elif page == "Sampling Sweep":
         """,
         unsafe_allow_html=True,
     )
+    _cos_power = "" if optics_sw["lens_axis"] == pc.LENS_AXIS_BEAM else "^3"
     st.markdown(
-        r"**Spectral sampling:** $\frac{\Delta\lambda}{\Delta x} = \frac{pd\cos^3\beta}{mf}$"
+        r"**Spectral sampling:** $\frac{\Delta\lambda}{\Delta x} = "
+        rf"\frac{{pd\cos{_cos_power}\beta}}{{mf}}$"
     )
 
-    current_nm_per_pix = None
-    try:
-        current_nm_per_pix = pc.nm_per_pixel(
+    def _budget_sw(**overrides):
+        """line_width_budget at the sidebar settings, with some overridden."""
+        params = dict(
             p=pixel_pitch_um * 1e-6,
             lines_per_mm=lines_per_mm_sw,
             alpha_deg=alpha_deg_sw,
             lambda_nm=wavelength_nm_sw,
             m=order_m_sw,
             f=focal_length_mm_sw * 1e-3,
+            **optics_sw,
         )
-        _sw_c1, _sw_c2, _sw_c3 = st.columns(3)
+        params.update(overrides)
+        return pc.line_width_budget(**params)
+
+    current_nm_per_pix = None
+    budget_sw = None
+    try:
+        budget_sw = _budget_sw()
+        current_nm_per_pix = budget_sw["nm_per_pixel"]
+        _sw_c1, _sw_c2 = st.columns(2)
         with _sw_c1:
             st.success(f"Current: **{current_nm_per_pix:.4f} nm/pixel**")
         with _sw_c2:
             st.info(f"Spectral range: **{current_nm_per_pix * camera_pixels:.2f} nm**")
-        grating_footprint_mm_sw = beam_width_mm_sw / np.cos(np.radians(alpha_deg_sw))
-        sensor_res_nm_sw = 2.0 * current_nm_per_pix
-        diff_res_nm_sw = wavelength_nm_sw / (abs(order_m_sw) * lines_per_mm_sw * grating_footprint_mm_sw)
-        def _fmt_sw(v):
-            return f"{v * 1000:.1f} pm" if v < 1.0 else f"{v:.3f} nm"
-        with _sw_c3:
-            if sensor_res_nm_sw >= diff_res_nm_sw:
-                st.warning("Bottleneck: **sensor**")
-            else:
-                st.warning("Bottleneck: **diffraction**")
-        _sw_r1, _sw_r2 = st.columns(2)
-        with _sw_r1:
-            st.info(f"Sensor-limited (Nyquist): **{_fmt_sw(sensor_res_nm_sw)}**")
-        with _sw_r2:
-            st.info(f"Diffraction-limited: **{_fmt_sw(diff_res_nm_sw)}**  ·  beam footprint **{grating_footprint_mm_sw:.1f} mm**")
-    except ValueError as e:
+        _show_resolution(budget_sw, "Sampling Sweep")
+    except (ValueError, ZeroDivisionError) as e:
         st.error(str(e))
 
     sweep_values = np.linspace(sweep_start, sweep_stop, int(sweep_points))
-    y_values = []
-
+    _sweep_override = {
+        "f (mm)": lambda v: {"f": v * 1e-3},
+        "lines/mm": lambda v: {"lines_per_mm": v},
+        "λ (nm)": lambda v: {"lambda_nm": v},
+        "α (deg)": lambda v: {"alpha_deg": v},
+    }[sweep_param]
+    _sweep_keys = ("nm_per_pixel", "fwhm_nm", "sampling_limit_nm",
+                   "resolution_nm", "resolving_power", "sigma_optics_nm",
+                   "sigma_angular_nm", "sigma_pixel_nm", "sigma_extra_nm",
+                   "sigma_total_nm")
+    sweep_budget = {k: [] for k in _sweep_keys}
     for val in sweep_values:
         try:
-            f_val = focal_length_mm_sw * 1e-3
-            lines_val = lines_per_mm_sw
-            lambda_val = wavelength_nm_sw
-            alpha_val = alpha_deg_sw
-
-            if sweep_param == "f (mm)":
-                f_val = val * 1e-3
-            elif sweep_param == "lines/mm":
-                lines_val = val
-            elif sweep_param == "λ (nm)":
-                lambda_val = val
-            elif sweep_param == "α (deg)":
-                alpha_val = val
-
-            y_values.append(
-                pc.nm_per_pixel(
-                    p=pixel_pitch_um * 1e-6,
-                    lines_per_mm=lines_val,
-                    alpha_deg=alpha_val,
-                    lambda_nm=lambda_val,
-                    m=order_m_sw,
-                    f=f_val,
-                )
-            )
-        except:
-            y_values.append(np.nan)
+            _b = _budget_sw(**_sweep_override(val))
+        except (ValueError, ZeroDivisionError):  # no such order here
+            _b = {}
+        for k in _sweep_keys:
+            sweep_budget[k].append(_b.get(k, np.nan))
+    y_values = sweep_budget["nm_per_pixel"]
 
     with plt.rc_context({"font.size": 13}):
         fig = Figure(figsize=(10, 4.5), dpi=360, facecolor=PLOT_BG)
@@ -1236,11 +1601,85 @@ elif page == "Sampling Sweep":
 
         st.pyplot(fig, use_container_width=True)
 
+        # ── Resolution over the same sweep
+        fig_r = Figure(figsize=(10, 4.5), dpi=360, facecolor=PLOT_BG)
+        ax_r = fig_r.add_subplot(111, facecolor=PLOT_SURFACE)
+        ax_r.tick_params(colors=PLOT_AXIS, which="both", labelsize=13)
+        for spine in ax_r.spines.values():
+            spine.set_color(PLOT_AXIS)
+        ax_r.plot(sweep_values, sweep_budget["resolution_nm"], color=ACCENT,
+                  linewidth=3, label="Resolution (larger of the two)")
+        ax_r.plot(sweep_values, sweep_budget["fwhm_nm"], color=PLOT_AXIS,
+                  linewidth=1.2, linestyle="--", label="Line FWHM (model)")
+        ax_r.plot(sweep_values, sweep_budget["sampling_limit_nm"],
+                  color=TEXT_MUTED, linewidth=1.2, linestyle=":",
+                  label="Sampling limit (2 px)")
+        if budget_sw is not None and sweep_start <= current_x <= sweep_stop:
+            ax_r.scatter([current_x], [budget_sw["resolution_nm"]],
+                         color="#FFD10F", s=150, marker="*",
+                         edgecolors="#F2B705", linewidths=1.5, zorder=10,
+                         label="Current configuration")
+        ax_r.set_xlabel(sweep_param, fontsize=13, color=PLOT_AXIS)
+        ax_r.set_ylabel("Δλ (nm)", fontsize=13, color=PLOT_AXIS)
+        ax_r.set_title(f"Spectral Resolution vs {sweep_param} (experimental)",
+                       fontsize=14,
+                       fontweight="bold", color=PLOT_AXIS)
+        ax_r.grid(True, alpha=0.3, linestyle="--", color=PLOT_GRID)
+        ax_r.legend(loc="best", fontsize=12)
+        st.pyplot(fig_r, use_container_width=True)
+
+        _sweep_column = {
+            "f (mm)": "focal_length_mm",
+            "lines/mm": "lines_per_mm",
+            "λ (nm)": "wavelength_nm",
+            "α (deg)": "alpha_deg",
+        }[sweep_param]
+        _data_download_button(
+            tables={
+                "sampling_sweep": {
+                    "description": f"Spectral sampling and modelled "
+                    f"resolution vs {_sweep_column}, all other inputs held at "
+                    "their run.json values (NaN where no diffracted order "
+                    "exists). resolution_nm is the larger of fwhm_nm and "
+                    "sampling_limit_nm (2 px).",
+                    "columns": {
+                        _sweep_column: sweep_values,
+                        **sweep_budget,
+                    },
+                },
+            },
+            meta={
+                "page": "Sampling Sweep",
+                "inputs": {
+                    "camera": selected_camera,
+                    "pixel_pitch_um": pixel_pitch_um,
+                    "camera_pixels": camera_pixels,
+                    "lines_per_mm": lines_per_mm_sw,
+                    "alpha_deg": alpha_deg_sw,
+                    "wavelength_nm": wavelength_nm_sw,
+                    "order_m": order_m_sw,
+                    "focal_length_mm": focal_length_mm_sw,
+                    **beam_source_sw,
+                    **optics_sw,
+                    "sweep_parameter": _sweep_column,
+                    "sweep_start": sweep_start,
+                    "sweep_stop": sweep_stop,
+                    "sweep_points": sweep_points,
+                },
+                "results": {
+                    "nm_per_pixel": current_nm_per_pix,
+                    "resolution": budget_sw,
+                },
+            },
+            stem=f"sampling_sweep_{_sweep_column}",
+            key="download_data_sw",
+        )
+
 
 # ============================================================================
 # PAGE 3: SPECTROMETER ANALYSIS
 # ============================================================================
-else:
+elif page == "Spectrometer Analysis":
     st.markdown(
         """
         <div style="margin-bottom: 1.75rem;">
@@ -1350,6 +1789,21 @@ else:
                     "gauss_sigmas_px": results["gauss_fit"]["sigmas_px"],
                     "stats": results["stats"],
                     "sensor_max": 511 if full_sensor_fa else 255,
+                    "peaks": results["peaks"],
+                    "tables": results["tables"],
+                    "export_errors": results["export_errors"],
+                    "gauss_popt": results["gauss_fit"]["popt"],
+                    "gauss_perr": results["gauss_fit"]["perr"],
+                    # Snapshot of the inputs this run used: the sidebar may
+                    # change before the data is downloaded.
+                    "inputs": {
+                        "source_file": uploaded_file.name,
+                        "detected_pixels": list(_detected_pixels),
+                        "ref_wavelengths_nm": list(_ref_wavelengths),
+                        "ref_pixels": list(_ref_pixels),
+                        "tolerance_px": tolerance_px_fa,
+                        "full_sensor": full_sensor_fa,
+                    },
                 }
                 st.session_state.pop("fa_error", None)
             except Exception as _e:
@@ -1371,20 +1825,8 @@ else:
         matched = data["matched"]
 
         # ── Summary metrics
-        a_cal = cal["a_nm_per_pixel"]
-        b_cal = cal["b_nm"]
-        unmatched_lines = data.get("unmatched_lines", {})
-        sensor_max = data.get("sensor_max", 255)
-
-        all_px = list(matched.keys()) + data["unmatched_pixels"]
-        px_lo = 0
-        px_hi = sensor_max
-
-        visible_predicted = {
-            wl: intensity
-            for wl, intensity in unmatched_lines.items()
-            if px_lo <= (wl - b_cal) / a_cal <= px_hi
-        }
+        peaks = data["peaks"]
+        n_predicted = sum(r["type"] == ac.PEAK_PREDICTED for r in peaks)
 
         mc1, mc2, mc3 = st.columns(3)
         with mc1:
@@ -1392,7 +1834,7 @@ else:
         with mc2:
             st.metric("Detected, no match", len(data["unmatched_pixels"]))
         with mc3:
-            st.metric("Expected, not found", len(visible_predicted))
+            st.metric("Expected, not found", n_predicted)
 
         st.divider()
 
@@ -1408,46 +1850,26 @@ else:
         _TABLE_DET_NM = "#FFD10F"  # yellow — detected, no NIST match
         _TABLE_PRED = "#FF8C42"  # orange — NIST line expected but not found
 
-        _tbl_rows = []
-        for px, info in matched.items():
-            _tbl_rows.append(
-                (
-                    float(px),
-                    f"{px:.1f}",
-                    f"{info['wavelength_nm']:.4f}",
-                    "Detected",
-                    _TABLE_DET,
-                    f"{info['intensity']:.0f}",
-                    f"{info['delta_px']:+.2f}",
-                )
+        _TYPE_STYLE = {
+            ac.PEAK_DETECTED: ("Detected", _TABLE_DET),
+            ac.PEAK_NO_MATCH: ("Detected — no match", _TABLE_DET_NM),
+            ac.PEAK_PREDICTED: ("Predicted (not found)", _TABLE_PRED),
+        }
+
+        def _num(v, fmt):
+            return "—" if np.isnan(v) else format(v, fmt)
+
+        _tbl_rows = [
+            (
+                r["pixel"],
+                f"{r['pixel']:.1f}",
+                f"{r['wavelength_nm']:.4f}",
+                *_TYPE_STYLE[r["type"]],
+                _num(r["nist_intensity"], ".0f"),
+                _num(r["delta_px"], "+.2f"),
             )
-        for px in data["unmatched_pixels"]:
-            pred_wl = a_cal * float(px) + b_cal
-            _tbl_rows.append(
-                (
-                    float(px),
-                    f"{float(px):.1f}",
-                    f"{pred_wl:.4f}",
-                    "Detected — no match",
-                    _TABLE_DET_NM,
-                    "—",
-                    "—",
-                )
-            )
-        for wl, intensity in visible_predicted.items():
-            pred_px = (wl - b_cal) / a_cal
-            _tbl_rows.append(
-                (
-                    pred_px,
-                    f"{pred_px:.1f}",
-                    f"{wl:.4f}",
-                    "Predicted (not found)",
-                    _TABLE_PRED,
-                    f"{intensity:.0f}",
-                    "—",
-                )
-            )
-        _tbl_rows.sort(key=lambda r: r[0])
+            for r in peaks
+        ]
 
         _th = (
             "background:var(--greg-surface);color:var(--greg-muted);font-size:0.72rem;"
@@ -1577,17 +1999,48 @@ else:
             _grid.paste(_img, ((_i % 2) * _w, (_i // 2) * _h))
         _buf = io.BytesIO()
         _grid.save(_buf, format="PNG")
-        _stem = (
-            uploaded_file.name.rsplit(".", 1)[0]
-            if uploaded_file
-            else "analysis"
-        )
-        st.download_button(
-            "Download plots as PNG",
-            data=_buf.getvalue(),
-            file_name=f"{_stem}_greg.png",
-            mime="image/png",
-        )
+        _inputs = data["inputs"]
+        _stem = _inputs["source_file"].rsplit(".", 1)[0]
+        _dl_png, _dl_data = st.columns(2)
+        with _dl_png:
+            st.download_button(
+                "Download plots as PNG",
+                data=_buf.getvalue(),
+                file_name=f"{_stem}_greg.png",
+                mime="image/png",
+                on_click="ignore",
+            )
+        with _dl_data:
+            _data_download_button(
+                tables=data["tables"],
+                meta={
+                    "page": "Spectrometer Analysis",
+                    "inputs": _inputs,
+                    "results": {
+                        "calibration": cal,
+                        "stats": stats,
+                        "ideal_pixels_used": data["ideal_pixels_used"],
+                        "gaussian_fit": {
+                            "sigmas_px": data["gauss_sigmas_px"],
+                            "popt": data["gauss_popt"],
+                            "perr": data["gauss_perr"],
+                            "popt_layout": "[A1, mu1, sigma1, ..., offset]",
+                        },
+                    },
+                    "plot_errors": st.session_state.get("fa_plot_errors", {}),
+                    "export_errors": data["export_errors"],
+                },
+                stem=_stem,
+                key="download_data_fa",
+            )
+        if data["export_errors"]:
+            st.caption(
+                "Left out of the data download: "
+                + "; ".join(
+                    f"{name} ({msg})"
+                    for name, msg in data["export_errors"].items()
+                )
+            )
 
     elif uploaded_file is None:
         st.info(
@@ -1598,6 +2051,288 @@ else:
         st.info(
             "Set the analysis parameters in the sidebar and click **Run Analysis**."
         )
+
+
+# ============================================================================
+# PAGE 4: SPECTRAL UNITS (ported from Prismatic)
+# ============================================================================
+else:
+    _su_restore()
+    ss = st.session_state
+    st.markdown(
+        """
+        <div style="margin-bottom: 1.75rem;">
+            <h1 style="font-size: 2.25rem; font-weight: 900; color: var(--greg-text);
+                       letter-spacing: -0.03em; margin-bottom: 0;">
+                Spectral Units
+            </h1>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-top: 0.6rem;">
+                <span style="height: 1px; width: 2.5rem; background: var(--greg-accent);
+                             display: inline-block;"></span>
+                <span style="font-size: 0.65rem; color: var(--greg-muted);
+                             letter-spacing: 0.2em; text-transform: uppercase;
+                             font-weight: 700;">wavelength · frequency · wavenumber · coherence</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    def _su_label(text: str) -> None:
+        st.markdown(
+            "<span style='font-size:0.75rem;letter-spacing:0.12em;"
+            "text-transform:uppercase;font-weight:700;color:var(--greg-muted);'>"
+            f"{text}</span>",
+            unsafe_allow_html=True,
+        )
+
+    def _su_tiles(items, min_rem: float = 9.5) -> None:
+        """Value tiles in a wrapping grid; st.metric cuts long values to '…'."""
+        tiles = "".join(
+            '<div style="background:var(--greg-surface);border:1px solid var(--greg-border);'
+            'border-left:2px solid var(--greg-accent);border-radius:.5rem;'
+            'padding:.7rem 1rem;min-width:0;">'
+            f'<div style="font-size:.8rem;color:var(--greg-muted);margin-bottom:.25rem;">'
+            f'{label}</div>'
+            '<div style="font-size:1.3rem;line-height:1.25;color:var(--greg-text);'
+            f'overflow-wrap:anywhere;">{value}</div></div>'
+            for label, value in items
+        )
+        st.markdown(
+            '<div style="display:grid;gap:.75rem;margin-bottom:.75rem;'
+            f'grid-template-columns:repeat(auto-fit,minmax({min_rem}rem,1fr));">'
+            f"{tiles}</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Three linked fields
+    _medium_word = "air" if _su_air() else "vacuum"
+    _fields = (
+        (f"Wavelength ({_medium_word})", "su_wl", "su_wl_unit", su.WL_UNITS,
+         su.WL_STEP, su.WL_FMT, _su_on_wl),
+        ("Frequency", "su_freq", "su_freq_unit", su.FREQ_UNITS,
+         su.FREQ_STEP, su.FREQ_FMT, _su_on_freq),
+        ("Wavenumber (vacuum)", "su_wnum", "su_wnum_unit", su.WNUM_UNITS,
+         su.WNUM_STEP, su.WNUM_FMT, _su_on_wnum),
+    )
+    for _col, (_label, _vkey, _ukey, _units, _steps, _fmts, _cb) in zip(
+        st.columns(3), _fields
+    ):
+        with _col:
+            _v_col, _u_col = st.columns([3, 2], vertical_alignment="bottom")
+            _unit = ss[_ukey]
+            with _v_col:
+                st.number_input(_label, key=_vkey, on_change=_cb,
+                                step=_steps[_unit], format=_fmts[_unit])
+            with _u_col:
+                st.selectbox(f"{_label} unit", list(_units), key=_ukey,
+                             on_change=_su_refresh_fields,
+                             label_visibility="collapsed")
+
+    wl_vac = float(ss["su_vac_nm"])
+    wl_air = su.vacuum_to_air(wl_vac)
+
+    # ── Spectrum bar
+    _VIS_LO, _VIS_HI = 380, 750
+    _in_vis = 380 <= wl_vac <= 780
+    _pct = max(2.0, min(98.0, (wl_vac - _VIS_LO) / (_VIS_HI - _VIS_LO) * 100))
+    _shown = wl_air if _su_air() else wl_vac
+    _wl_label = f"{_shown:.2f} nm" if _shown < 10_000 else f"{_shown / 1000:.3g} µm"
+    _opacity = "1" if _in_vis else "0.3"
+    st.markdown(
+        f'<div style="background:var(--greg-surface);border:1px solid var(--greg-border);'
+        f'border-radius:4px;padding:1.25rem 1.5rem 1.5rem;margin:.75rem 0;">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;'
+        f'flex-wrap:wrap;gap:.5rem;margin-bottom:1.5rem;">'
+        f'<span style="font-size:.65rem;font-weight:700;letter-spacing:.08em;'
+        f'color:var(--greg-muted);text-transform:uppercase;">'
+        f'Visible range 380–750 nm</span>'
+        f'<span style="font-size:.6rem;font-weight:700;letter-spacing:.05em;'
+        f'color:{"var(--greg-accent)" if _in_vis else "var(--greg-muted)"};">'
+        f'{"VISIBLE" if _in_vis else "OUT OF VISIBLE RANGE"}</span></div>'
+        f'<div style="position:relative;margin-top:2rem;">'
+        f'<div style="position:absolute;left:{_pct}%;top:-26px;transform:translateX(-50%);'
+        f'opacity:{_opacity};pointer-events:none;">'
+        f'<span style="font-size:.78rem;color:var(--greg-text);font-weight:700;'
+        f'white-space:nowrap;">{_wl_label}</span></div>'
+        f'<div style="position:absolute;left:{_pct}%;top:-4px;width:2px;'
+        f'height:calc(100% + 12px);transform:translateX(-50%);'
+        f'background:var(--greg-text);opacity:{_opacity};z-index:2;"></div>'
+        f'<div style="height:28px;border-radius:3px;background:linear-gradient(to right,'
+        f'#590059 0%,#6600aa 5%,#5500ff 11%,#0000ff 16%,#0090ff 24%,#00ffff 29%,'
+        f'#00ff7f 33%,#00ff00 35%,#7cff00 43%,#ffff00 54%,#ffaa00 60%,#ff6d00 65%,'
+        f'#ff3500 69%,#ff1000 72%,#ff0000 75%,#ee0000 80%,#d80000 87%,#c20000 91%,'
+        f'#a80000 96%,#8c0000 100%);"></div>'
+        f'<div style="display:flex;justify-content:space-between;margin-top:.4rem;'
+        f'font-size:.68rem;color:var(--greg-muted);">'
+        f'<span>380 nm · Violet</span><span>565 nm · Green</span>'
+        f'<span>750 nm · Red</span></div></div></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Colour swatch + derived quantities
+    _rgb = su.wavelength_to_rgb(wl_vac)
+    _region = su.spectral_region(wl_vac)
+    _band = su.find_band(wl_vac, su.TELECOM_BANDS)
+    _col_sw, _col_ph = st.columns([1, 4])
+    with _col_sw:
+        if _rgb:
+            _hex = "#{:02X}{:02X}{:02X}".format(*_rgb)
+            _swatch = (f'<div style="height:56px;border-radius:3px;background:{_hex};'
+                       f'margin-bottom:.6rem;"></div>')
+        else:
+            _swatch = ('<div style="height:56px;border-radius:3px;margin-bottom:.6rem;'
+                       'border:1px dashed var(--greg-border);display:flex;'
+                       'align-items:center;justify-content:center;font-size:.6rem;'
+                       'color:var(--greg-muted);letter-spacing:.05em;">INVISIBLE</div>')
+        _band_html = (f'<div style="font-size:.65rem;color:var(--greg-accent);'
+                      f'font-weight:700;margin-top:.3rem;">Telecom {_band}</div>'
+                      if _band else "")
+        st.markdown(
+            f'<div style="background:var(--greg-surface);border:1px solid var(--greg-border);'
+            f'border-radius:4px;padding:1rem;">{_swatch}'
+            f'<div style="font-size:.85rem;font-weight:600;color:var(--greg-text);">'
+            f'{_region}</div>{_band_html}</div>',
+            unsafe_allow_html=True,
+        )
+    with _col_ph:
+        _su_tiles([
+            ("Photon energy", su.fmt_energy(su.photon_energy_ev(wl_vac))),
+            ("Period", su.fmt_period(su.period_fs(wl_vac))),
+            ("Angular frequency", su.fmt_omega(su.ang_freq_radfs(wl_vac))),
+            ("Vacuum λ", f"{wl_vac:.4f} nm") if _su_air()
+            else ("Air λ", f"{wl_air:.4f} nm"),
+        ])
+        _n_air = su.refractive_index_air(wl_vac)
+        st.caption(
+            f"Air − vacuum: {1e3 * (wl_air - wl_vac):+.1f} pm "
+            f"(n_air − 1 = {(_n_air - 1) * 1e6:.2f} × 10⁻⁶). Below 200 nm only "
+            "vacuum wavelengths apply."
+        )
+
+    # ── Send to the grating pages
+    _can_send = WAVELENGTH_MIN_NM <= wl_air <= WAVELENGTH_MAX_NM
+    _s1, _s2, _s3 = st.columns([1, 1, 2])
+    for _scol, _target in zip((_s1, _s2), WAVELENGTH_KEYS):
+        with _scol:
+            st.button(
+                f"Use in {_target}",
+                key=f"su_send_{WAVELENGTH_KEYS[_target]}",
+                on_click=_su_send,
+                args=(_target,),
+                disabled=not _can_send,
+                use_container_width=True,
+            )
+    with _s3:
+        st.caption(
+            f"Sends the air wavelength {wl_air:.4f} nm and opens the page."
+            if _can_send
+            else f"Pages 1–2 accept {WAVELENGTH_MIN_NM:.0f}–"
+            f"{WAVELENGTH_MAX_NM:.0f} nm."
+        )
+
+    st.divider()
+
+    # ── Spectral width at this wavelength
+    _su_label("Spectral width at this wavelength")
+    _w1, _w2, _w3 = st.columns([2, 1, 3], vertical_alignment="bottom")
+    with _w1:
+        st.number_input("Width", min_value=0.0, key="su_width", format="%.6g")
+    with _w2:
+        st.selectbox("Width unit", list(su.WIDTH_UNITS), key="su_width_unit",
+                     label_visibility="collapsed")
+    with _w3:
+        _last = ss.get("_last_resolution")
+        if _last:
+            st.button(
+                f"Use resolution from {_last[1]} ({_fmt_nm(_last[0])})",
+                key="su_use_resolution",
+                on_click=_su_use_width,
+                args=(_last[0],),
+            )
+    if ss["su_width"] > 0:
+        _w = su.width_in(ss["su_width"], ss["su_width_unit"], wl_vac)
+        _su_tiles([
+            ("Δλ", _fmt_nm(_w["dl_nm"])),
+            ("Δν", f"{_w['dnu_ghz']:.4g} GHz"),
+            ("Δν̃", f"{_w['dwnum_cm']:.4g} cm⁻¹"),
+            ("R = λ/Δλ", f"{_w['resolving_power']:,.0f}"),
+            ("Coherence time", su.fmt_time(_w["tau_c_s"])),
+            ("Coherence length", su.fmt_length(_w["l_c_m"])),
+        ])
+        st.caption(
+            "Δν = c·Δλ/λ², Δν̃ = Δλ/λ² at the vacuum wavelength. Coherence "
+            "time τc = 1/Δν = λ²/(c·Δλ) and length Lc = c·τc; the exact "
+            "prefactor depends on the line shape (0.44/Δν for a Gaussian "
+            "FWHM), so treat them as scales."
+        )
+
+    st.divider()
+
+    # ── Reference data
+    _su_label("Reference")
+    _t_ne, _t_astro, _t_laser, _t_uv, _t_ir, _t_tel = st.tabs(
+        ["Neon (NIST)", "Astronomical lines", "Laser lines", "Ultraviolet bands",
+         "Infrared bands", "Telecom bands"]
+    )
+
+    def _line_buttons(lines, in_air: bool, prefix: str, ncols: int,
+                      digits: "int | None" = None) -> None:
+        cols = st.columns(ncols)
+        for i, (name, lam, desc) in enumerate(lines):
+            with cols[i % ncols]:
+                st.button(
+                    f"{name} · {lam:g} nm" if digits is None
+                    else f"{name} · {lam:.{digits}f} nm",
+                    key=f"su_ref_{prefix}_{i}",
+                    on_click=_su_jump,
+                    args=(lam, in_air),
+                    help=desc,
+                    use_container_width=True,
+                )
+
+    def _band_range(lo: float, hi: float) -> str:
+        if lo >= 3000:
+            return f"{lo / 1000:g}–{hi / 1000:g} µm"
+        return f"{lo:g}–{hi:g} nm"
+
+    def _band_rows(bands) -> None:
+        for name, lo, hi, desc in bands:
+            active = lo <= wl_vac < hi
+            border = "var(--greg-accent)" if active else "var(--greg-border)"
+            badge = (" <span style='font-size:.58rem;font-weight:700;"
+                     "color:var(--greg-accent);'>ACTIVE</span>" if active else "")
+            st.markdown(
+                f'<div style="border:1px solid {border};border-radius:4px;'
+                f'padding:.6rem 1rem;margin-bottom:.4rem;display:flex;flex-wrap:wrap;'
+                f'gap:.5rem;justify-content:space-between;align-items:center;">'
+                f'<div><span style="font-size:.8rem;font-weight:700;'
+                f'color:var(--greg-text);">{name}</span>{badge}<br>'
+                f'<span style="font-size:.65rem;color:var(--greg-muted);">'
+                f'{_band_range(lo, hi)} (vacuum)</span></div>'
+                f'<span style="font-size:.72rem;color:var(--greg-muted);'
+                f'max-width:60%;text-align:right;">{desc}</span></div>',
+                unsafe_allow_html=True,
+            )
+
+    with _t_ne:
+        st.caption("Strong Ne I lines from NIST, air wavelengths (the "
+                   "calibration reference used on page 3).")
+        _line_buttons(su.neon_lines(10_000), True, "ne", 4, digits=3)
+    with _t_astro:
+        st.caption("Air wavelengths.")
+        _line_buttons(su.SPECTRAL_LINES, True, "astro", 3)
+    with _t_laser:
+        st.caption("Nominal wavelengths as usually quoted (air).")
+        _line_buttons(su.LASER_LINES, True, "laser", 3)
+    with _t_uv:
+        _band_rows(su.UV_BANDS)
+    with _t_ir:
+        _band_rows(su.IR_BANDS)
+    with _t_tel:
+        _band_rows(su.TELECOM_BANDS)
+
+    _su_save()
 
 
 # ============================================================================
