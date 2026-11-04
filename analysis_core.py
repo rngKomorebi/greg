@@ -114,7 +114,7 @@ def set_theme(theme: str = "dark") -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 def _load_neon_reference() -> Dict[float, float]:
     json_path = Path(__file__).parent / "nist_neon.json"
-    with open(json_path) as fh:
+    with open(json_path, encoding="utf-8") as fh:
         data = json.load(fh)
     return {
         float(wl): float(intensity) for wl, intensity in data["neon_lines"]
@@ -139,6 +139,27 @@ def _gaussian_model(x, *p):
         A, mu, s = p[i], p[i + 1], p[i + 2]
         y += A * np.exp(-0.5 * ((x - mu) / s) ** 2)
     return y
+
+
+def _initial_sigma(x, y, peak, c0: float, max_sigma_px: float) -> float:
+    """Starting σ for one peak, from its width at half maximum.
+
+    Counts the samples around the peak that stay above half its height and
+    converts that width to σ. The starting point matters a great deal: lines
+    on these sensors are often only one or two pixels wide, and starting the
+    fit at a σ many times too large left it crawling through thousands of
+    iterations, or giving up entirely when many peaks were fitted at once.
+    """
+    i = int(np.argmin(np.abs(x - peak)))
+    half = c0 + 0.5 * (y[i] - c0)
+    lo = hi = i
+    while lo > 0 and y[lo - 1] > half:
+        lo -= 1
+    while hi < len(y) - 1 and y[hi + 1] > half:
+        hi += 1
+    dx = float(np.median(np.diff(x))) if len(x) > 1 else 1.0
+    fwhm = (hi - lo + 1) * abs(dx)
+    return float(np.clip(fwhm / 2.355, 0.5 * abs(dx), 0.5 * max_sigma_px))
 
 
 def fit_gaussians(
@@ -169,7 +190,7 @@ def fit_gaussians(
     p0, lower, upper = [], [], []
     for peak in peak_pixels:
         A0 = max(float(y[np.argmin(np.abs(x - peak))] - c0), min_A)
-        s0 = float((x.max() - x.min()) / 50)
+        s0 = _initial_sigma(x, y, peak, c0, max_sigma_px)
         p0 += [A0, float(peak), s0]
         lower += [0.0, x.min(), 0.1]
         upper += [np.inf, x.max(), max_sigma_px]
@@ -411,29 +432,101 @@ def _load_pickle_fig(pkl_file) -> plt.Figure:
     return fig
 
 
-def extract_pixels_from_legend(pkl_file) -> List[float]:
-    """Extract peak pixel positions from the legend labels of a pickled figure.
+def _legend_pixel(label: str) -> Optional[float]:
+    """Pixel position named in one legend label, or None if there is none.
 
-    Scans every legend across all axes and collects numeric tokens found in
-    the label text. Only values in [0, 4096] are returned (covers any real
-    detector width). Values are de-duplicated and returned in ascending order.
+    Labels like "Peak at 19, Rate: 29.94 kHz" give the number after "peak at".
+    Labels without that phrase fall back to the largest numeric token in
+    [10, 4096] (covers any real detector width).
+    """
+    m = re.search(r"peak\s*(?:at)?\s*:?\s*(\d+(?:\.\d+)?)", label, re.I)
+    if m and 0.0 <= float(m.group(1)) <= 4096.0:
+        return float(m.group(1))
+    candidates = [
+        float(t)
+        for t in re.findall(r"\b\d+(?:\.\d+)?\b", label)
+        if 10.0 <= float(t) <= 4096.0
+    ]
+    return max(candidates) if candidates else None
+
+
+def extract_peaks_from_legend(pkl_file) -> List[dict]:
+    """Peaks named in the legend labels of a pickled figure, with their signal.
+
+    Returns one dict per distinct pixel, sorted by pixel:
+    {pixel, signal, label}. signal is the sensor trace's value at the nearest
+    sample (NaN if the figure has no trace), so peaks can be compared by height.
     """
     fig = _load_pickle_fig(pkl_file)
-    pixels: list = []
-    for ax in fig.axes:
-        leg = ax.get_legend()
-        if leg is None:
+    try:
+        found: Dict[float, str] = {}
+        for ax in fig.axes:
+            leg = ax.get_legend()
+            if leg is None:
+                continue
+            for text_obj in leg.get_texts():
+                label = text_obj.get_text()
+                px = _legend_pixel(label)
+                if px is not None and px not in found:
+                    found[px] = label
+
+        x = y = None
+        lines = [ln for ax in fig.axes for ln in ax.lines
+                 if ln.get_xdata() is not None and len(ln.get_xdata())]
+        if lines:
+            ln = max(lines, key=lambda l: len(l.get_xdata()))
+            x = np.asarray(ln.get_xdata(), float)
+            y = np.asarray(ln.get_ydata(), float)
+    finally:
+        plt.close(fig)
+
+    rows = []
+    for px in sorted(found):
+        signal = (float(y[np.argmin(np.abs(x - px))])
+                  if x is not None else float("nan"))
+        rows.append({"pixel": px, "signal": signal, "label": found[px]})
+    return rows
+
+
+def extract_pixels_from_legend(pkl_file) -> List[float]:
+    """Peak pixel positions from the legend labels, de-duplicated and sorted."""
+    return [r["pixel"] for r in extract_peaks_from_legend(pkl_file)]
+
+
+def flag_close_peaks(
+    pixels, signals, min_sep_px: float
+) -> List[Optional[float]]:
+    """Find peaks that are probably the same line counted twice.
+
+    Peaks whose consecutive gaps are all <= min_sep_px form one group; the
+    strongest peak in each group is kept. Returns, per input peak, None when it
+    is kept, or the pixel of the stronger peak it duplicates. NaN signals rank
+    lowest. min_sep_px <= 0 disables grouping.
+    """
+    px = np.asarray(pixels, float)
+    sig = np.nan_to_num(np.asarray(signals, float), nan=-np.inf)
+    out: List[Optional[float]] = [None] * len(px)
+    if min_sep_px <= 0 or len(px) < 2:
+        return out
+
+    order = np.argsort(px)
+    groups, current = [], [order[0]]
+    for prev, cur in zip(order[:-1], order[1:]):
+        if px[cur] - px[prev] <= min_sep_px:
+            current.append(cur)
+        else:
+            groups.append(current)
+            current = [cur]
+    groups.append(current)
+
+    for g in groups:
+        if len(g) < 2:
             continue
-        for text_obj in leg.get_texts():
-            candidates = [
-                float(t)
-                for t in re.findall(r"\b\d+(?:\.\d+)?\b", text_obj.get_text())
-                if 10.0 <= float(t) <= 4096.0
-            ]
-            if candidates:
-                pixels.append(max(candidates))
-    plt.close(fig)
-    return sorted(set(pixels))
+        keep = max(g, key=lambda i: sig[i])
+        for i in g:
+            if i != keep:
+                out[i] = float(px[keep])
+    return out
 
 
 def _isolate_sensor_axis(fig: plt.Figure) -> plt.Axes:

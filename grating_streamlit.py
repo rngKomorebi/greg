@@ -30,12 +30,13 @@ License: MIT
 """
 
 import io
+import re
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from matplotlib.figure import Figure
 from PIL import Image
 
@@ -175,6 +176,60 @@ CAMERAS = {
 }
 
 PAGES = ["Output Angle", "Sampling Sweep", "Spectrometer Analysis", "Spectral Units"]
+
+# ── Keep page settings across page switches ──────────────────────────────────
+# Streamlit deletes a widget's value at the end of any run that does not draw
+# it, so leaving a page reset every input on it. Each run starts by copying the
+# values of the page 1-3 widgets that still exist into _kept_widgets, then puts
+# back any that Streamlit has dropped. The Spectral Units page has its own
+# scheme (_su_restore / _su_save). Writing a widget key this way is not allowed
+# for buttons, uploaders and data editors, so only the patterns below are kept;
+# the duplicate-value warning this would raise is switched off in
+# .streamlit/config.toml.
+_KEEP_PATTERN = re.compile(
+    r"^(?!download_data_|run_analysis_|fa_peaks_|fa_upload)\w+_(oa|sw|fa)(_.*)?$"
+    r"|^sweep_(param|points|start_.*|stop_.*)$"
+    r"|^ref_(wavelengths|pixels)_str$"
+)
+_kept = st.session_state.setdefault("_kept_widgets", {})
+for _k in list(st.session_state.keys()):
+    if isinstance(_k, str) and _KEEP_PATTERN.match(_k):
+        _kept[_k] = st.session_state[_k]
+for _k, _v in _kept.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
+class _KeptFile(io.BytesIO):
+    """In-memory copy of an uploaded file, with the name and size it had."""
+
+    def __init__(self, data: bytes, name: str) -> None:
+        super().__init__(data)
+        self.name = name
+        self.size = len(data)
+
+
+def _fa_keep_file(f) -> None:
+    """Keep the page-3 data file f, or forget the kept one when f is None.
+
+    The uploader shows no file after a page switch and that cannot be undone
+    from session state, so the bytes are kept here.
+    """
+    if f is None:
+        st.session_state.pop("_fa_file", None)
+    else:
+        st.session_state["_fa_file"] = (f.name, f.getvalue())
+
+
+def _fa_on_upload() -> None:
+    """Uploader on_change: fires on a real upload or removal only, never on
+    returning to the page, so an empty uploader on return keeps the file."""
+    _fa_keep_file(st.session_state.get("fa_upload"))
+
+
+def _fa_kept_file() -> "_KeptFile | None":
+    kept = st.session_state.get("_fa_file")
+    return None if kept is None else _KeptFile(kept[1], kept[0])
 
 # Wavelength inputs on pages 1 and 2. Their defaults are seeded through session
 # state rather than value=, so the Spectral Units page can set them too
@@ -466,11 +521,32 @@ def _make_grating_diagram(
     lines_per_mm: float,
     wavelength_nm: float,
     order_m: int,
+    mirror: bool = False,
 ) -> Figure:
-    """Return a Figure illustrating the grating geometry for the current params."""
+    """Return a Figure illustrating the grating geometry for the current params.
+
+    mirror=True flips the whole picture left-right, so the incident beam comes
+    in from the right. The diffracted beams flip with it: the sign convention
+    is relative to the incident side, so the physics is unchanged.
+    """
     d_nm = 1e6 / lines_per_mm
     alpha_rad = np.radians(alpha_deg)
     L = 3.2
+    sgn = -1.0 if mirror else 1.0
+
+    def _ha(h: str) -> str:
+        """Swap left/right text alignment when mirrored."""
+        if not mirror:
+            return h
+        return {"left": "right", "right": "left"}.get(h, h)
+
+    def _arc(t1: float, t2: float) -> tuple[float, float]:
+        """Mirror an arc's angle span (degrees) about the normal."""
+        return (180.0 - t2, 180.0 - t1) if mirror else (t1, t2)
+
+    def _ang(t: float) -> float:
+        """Mirror a single angle (degrees) about the normal."""
+        return 180.0 - t if mirror else t
 
     # Determine which orders exist
     valid_orders, evanescent_m = [], []
@@ -505,8 +581,8 @@ def _make_grating_diagram(
     # Grating surface
     ax.plot([-5, 5], [0, 0], color=ACCENT, lw=3, solid_capstyle="round", zorder=5)
     for x in np.linspace(-4.8, 4.8, 38):
-        ax.plot([x, x - 0.055], [0, -0.2], color=ACCENT, lw=0.7, alpha=0.4)
-    ax.text(4.8, -0.72, "grating", color=ACCENT, fontsize=10, ha="right")
+        ax.plot([sgn * x, sgn * (x - 0.055)], [0, -0.2], color=ACCENT, lw=0.7, alpha=0.4)
+    ax.text(sgn * 4.8, -0.72, "grating", color=ACCENT, fontsize=10, ha=_ha("right"))
 
     # Normal
     ax.plot([0, 0], [-0.7, 4.7], color=TEXT_MUTED, lw=1.1, linestyle="--", alpha=0.55)
@@ -514,24 +590,25 @@ def _make_grating_diagram(
         "", xy=(0, 4.7), xytext=(0, 4.35),
         arrowprops=dict(arrowstyle="->", color=TEXT_MUTED, lw=1.1),
     )
-    ax.text(0.12, 4.58, "normal", color=TEXT_MUTED, fontsize=10)
+    ax.text(sgn * 0.12, 4.58, "normal", color=TEXT_MUTED, fontsize=10, ha=_ha("left"))
 
-    # Incident beam: source at (−sin α · L, cos α · L)
-    sx, sy = -np.sin(alpha_rad) * L, np.cos(alpha_rad) * L
+    # Incident beam: source at (−sin α · L, cos α · L), x-flipped when mirrored
+    sx, sy = -sgn * np.sin(alpha_rad) * L, np.cos(alpha_rad) * L
     ax.annotate(
         "", xy=(0, 0), xytext=(sx, sy),
         arrowprops=dict(arrowstyle="->", color=PLOT_AXIS, lw=2.2, mutation_scale=15),
     )
-    ax.text(sx - 0.15, sy + 0.12, "incident", color=PLOT_AXIS, fontsize=11,
-            ha="right", fontweight="bold")
+    ax.text(sx - sgn * 0.15, sy + 0.12, "incident", color=PLOT_AXIS, fontsize=11,
+            ha=_ha("right"), fontweight="bold")
 
-    # α arc (from normal CCW to incident beam direction)
+    # α arc (from normal to incident beam direction)
     r_a = 0.85
+    _a1, _a2 = _arc(90, 90 + alpha_deg)
     ax.add_patch(mpatches.Arc(
         (0, 0), r_a * 2, r_a * 2, angle=0,
-        theta1=90, theta2=90 + alpha_deg, color=PLOT_AXIS, lw=1.6,
+        theta1=_a1, theta2=_a2, color=PLOT_AXIS, lw=1.6,
     ))
-    mid_a = np.radians(90 + alpha_deg / 2)
+    mid_a = np.radians(_ang(90 + alpha_deg / 2))
     ax.text(
         np.cos(mid_a) * (r_a + 0.3), np.sin(mid_a) * (r_a + 0.3),
         f"α = {alpha_deg:.0f}°", color=PLOT_AXIS, fontsize=11,
@@ -544,7 +621,7 @@ def _make_grating_diagram(
         color = order_colors.get(m, TEXT_MUTED)
         lw = 2.4 if m == order_m else 1.7
         beta_rad = np.radians(beta_deg)
-        ex, ey = -np.sin(beta_rad) * L, np.cos(beta_rad) * L
+        ex, ey = -sgn * np.sin(beta_rad) * L, np.cos(beta_rad) * L
         ax.annotate(
             "", xy=(ex, ey), xytext=(0, 0),
             arrowprops=dict(arrowstyle="->", color=color, lw=lw, mutation_scale=14),
@@ -568,19 +645,22 @@ def _make_grating_diagram(
         col_sel = order_colors.get(order_m, ACCENT)
         t1 = 90 if beta_selected >= 0 else 90 + beta_selected
         t2 = 90 + beta_selected if beta_selected >= 0 else 90
+        t1, t2 = _arc(t1, t2)
         ax.add_patch(mpatches.Arc(
             (0, 0), r_b * 2, r_b * 2, angle=0, theta1=t1, theta2=t2,
             color=col_sel, lw=1.5,
         ))
-        mid_b = np.radians(90 + beta_selected / 2)
+        mid_b = np.radians(_ang(90 + beta_selected / 2))
         ax.text(
             np.cos(mid_b) * (r_b + 0.32), np.sin(mid_b) * (r_b + 0.32),
             "β", color=col_sel, fontsize=15, fontweight="bold", ha="center", va="center",
         )
 
     # Side legend
-    ax.text(-4.8, 4.72, "β > 0  (same side as incident)", color=TEXT_MUTED, fontsize=9)
-    ax.text(4.8, 4.72, "β < 0  (opposite side)", color=TEXT_MUTED, fontsize=9, ha="right")
+    ax.text(-sgn * 4.8, 4.72, "β > 0  (same side as incident)", color=TEXT_MUTED,
+            fontsize=9, ha=_ha("left"))
+    ax.text(sgn * 4.8, 4.72, "β < 0  (opposite side)", color=TEXT_MUTED,
+            fontsize=9, ha=_ha("right"))
 
     # Evanescent note
     ev_shown = sorted(m for m in evanescent_m if -2 <= m <= 3)
@@ -784,7 +864,11 @@ st.markdown(
 # actually change, and a rerun does not change the theme, so it cannot loop.
 st.button(THEME_SYNC_LABEL, key=THEME_SYNC_KEY)
 
-components.html(
+# st.iframe (Streamlit >= 1.56) replaces the deprecated components.html. An
+# HTML string is embedded with same-origin access, which the script needs to
+# reach the app page through window.parent. height="content" measures the
+# script-only page as 0 px, as height=0 did before.
+st.iframe(
     f"""
     <script>
     (function () {{
@@ -825,8 +909,7 @@ components.html(
     }})();
     </script>
     """,
-    height=0,
-    scrolling=False,
+    height="content",
 )
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -852,31 +935,31 @@ with st.sidebar:
         key="camera_select",
     )
     _cam = CAMERAS[selected_camera]
-    # Seeded from the preset, keyed per camera so switching camera restores it
-    _pitch_col, _pixels_col = st.columns(2)
-    with _pitch_col:
-        pixel_pitch_um = st.number_input(
-            "Pixel pitch (µm)",
-            min_value=0.1,
-            max_value=1000.0,
-            value=float(_cam["pitch_um"]),
-            step=0.1,
-            format="%.2f",
-            key=f"pitch_{selected_camera}",
-            help="Centre-to-centre pixel spacing along the dispersion "
-            "direction. Change it to project to another camera.",
-        )
-    with _pixels_col:
-        camera_pixels = int(st.number_input(
-            "Sensor size (px)",
-            min_value=1,
-            max_value=100000,
-            value=int(_cam["pixels"]),
-            step=1,
-            key=f"pixels_{selected_camera}",
-            help="Number of pixels along the dispersion direction; sets the "
-            "spectral range.",
-        ))
+    # Seeded from the preset, keyed per camera so switching camera restores it.
+    # Stacked rather than side by side: in two columns at the default sidebar
+    # width one label wrapped and the other did not, leaving the inputs at
+    # different heights, and the boxes were too narrow to show "26.20".
+    pixel_pitch_um = st.number_input(
+        "Pixel pitch (µm)",
+        min_value=0.1,
+        max_value=1000.0,
+        value=float(_cam["pitch_um"]),
+        step=0.1,
+        format="%.2f",
+        key=f"pitch_{selected_camera}",
+        help="Centre-to-centre pixel spacing along the dispersion "
+        "direction. Change it to project to another camera.",
+    )
+    camera_pixels = int(st.number_input(
+        "Sensor size (px)",
+        min_value=1,
+        max_value=100000,
+        value=int(_cam["pixels"]),
+        step=1,
+        key=f"pixels_{selected_camera}",
+        help="Number of pixels along the dispersion direction; sets the "
+        "spectral range.",
+    ))
 
     page = st.radio(
         "Page",
@@ -1085,26 +1168,36 @@ with st.sidebar:
     # Spectrometer Analysis params
     elif page == "Spectrometer Analysis":
         st.subheader("Data File")
-        uploaded_file = st.file_uploader(
+        _fresh_upload = st.file_uploader(
             "Choose a data file",
             type=["pkl", "pickle"],
             help="Upload a pickled matplotlib sensor-population figure (.pkl)",
+            key="fa_upload",
+            on_change=_fa_on_upload,
         )
+        if _fresh_upload is not None:
+            _fa_keep_file(_fresh_upload)
+        # The uploader comes back empty after a page switch, so the analysis
+        # reads the kept copy of the file rather than the uploader itself.
+        uploaded_file = _fa_kept_file()
         if uploaded_file is not None:
             st.success(f"Loaded: **{uploaded_file.name}**")
-            st.caption(f"{uploaded_file.size:,} bytes")
+            st.caption(
+                f"{uploaded_file.size:,} bytes"
+                + ("" if _fresh_upload is not None
+                   else " · kept from earlier; upload a file to replace it")
+            )
             # Auto-extract peak pixels from the pickled figure's legend. The
             # theme is part of the key so the rendered PNG is rebuilt when the
             # palette changes, instead of keeping the previous theme's colours.
             _pkl_id = f"{uploaded_file.name}_{uploaded_file.size}_{THEME}"
             if st.session_state.get("_fa_pkl_id") != _pkl_id:
                 try:
-                    _px_from_legend = ac.extract_pixels_from_legend(
-                        uploaded_file
+                    st.session_state["_fa_legend_peaks"] = (
+                        ac.extract_peaks_from_legend(uploaded_file)
                     )
-                    st.session_state["_fa_extracted_pixels"] = _px_from_legend
                 except Exception:
-                    st.session_state["_fa_extracted_pixels"] = []
+                    st.session_state["_fa_legend_peaks"] = []
                 # Render raw pickle to PNG for reference display
                 try:
                     _raw_fig = ac._load_pickle_fig(uploaded_file)
@@ -1137,38 +1230,87 @@ with st.sidebar:
         else:
             st.info("No file uploaded yet")
 
-        _auto_pixels = st.session_state.get("_fa_extracted_pixels", [])
-        if _auto_pixels:
-            st.caption(
-                "Detected peaks (from legend): "
-                + ", ".join(
-                    str(int(p)) if p == int(p) else str(p)
-                    for p in _auto_pixels
-                )
+        # ── Peak selection ───────────────────────────────────────────────────
+        # Every peak named in the legend, with a tick box to leave it out.
+        # Peaks closer than the merge distance are usually one line split by a
+        # dead or hot pixel; only the strongest of each group starts ticked.
+        _legend_peaks = (
+            st.session_state.get("_fa_legend_peaks", [])
+            if uploaded_file is not None else []
+        )
+        _detected_pixels: list = []
+        _excluded_pixels: list = []
+        if _legend_peaks:
+            st.subheader("Detected Peaks")
+            merge_px_fa = st.number_input(
+                "Merge peaks within (px)",
+                min_value=0.0,
+                max_value=20.0,
+                value=2.0,
+                step=0.5,
+                key="merge_px_fa",
+                help=(
+                    "Peaks this close to a neighbour are treated as one line, "
+                    "and only the strongest starts ticked. 0 turns this off. "
+                    "Changing it resets the ticks below."
+                ),
             )
-
-        st.markdown(
-            """
-            <style>
-            div[data-testid="stSidebarContent"] div[data-testid="stButton"] > button {
-                display: block;
-                margin: 0.4rem auto 0.2rem auto;
-                font-size: 1.15rem;
-                font-weight: 700;
-                border: 2px solid var(--greg-accent);
-                padding: 0.45rem 2rem;
-                width: 80%;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-        run_analysis_btn = st.button(
-            "Run Analysis",
-            key="run_analysis_fa",
-            disabled=uploaded_file is None,
-            use_container_width=True,
-        )
+            _px_list = [p["pixel"] for p in _legend_peaks]
+            _dups = ac.flag_close_peaks(
+                _px_list, [p["signal"] for p in _legend_peaks], merge_px_fa
+            )
+            # The key carries the file and the merge distance, so a new file or
+            # a new distance starts from fresh defaults instead of old ticks.
+            _peaks_key = (
+                f"fa_peaks_{uploaded_file.name}_{uploaded_file.size}"
+                f"_{merge_px_fa:g}"
+            )
+            # The editor forgets its ticks when the page is left, so they are
+            # also saved under _fa_peak_use and used to seed the table.
+            _saved_use = st.session_state.setdefault("_fa_peak_use", {}).get(
+                _peaks_key, {}
+            )
+            _peak_df = pd.DataFrame({
+                "Use": [
+                    _saved_use.get(px, d is None)
+                    for px, d in zip(_px_list, _dups)
+                ],
+                "Pixel": _px_list,
+                "Signal": [p["signal"] for p in _legend_peaks],
+            })
+            _edited = st.data_editor(
+                _peak_df,
+                key=_peaks_key,
+                hide_index=True,
+                num_rows="fixed",
+                disabled=["Pixel", "Signal"],
+                height=min(len(_peak_df), 8) * 35 + 38,
+                width="stretch",
+                column_config={
+                    "Use": st.column_config.CheckboxColumn(
+                        "Use", width="small",
+                        help="Untick to leave this peak out of the analysis",
+                    ),
+                    "Pixel": st.column_config.NumberColumn(
+                        "Pixel", format="%g", width="small"
+                    ),
+                    "Signal": st.column_config.NumberColumn(
+                        "Signal", format="%.2f", width="small",
+                        help="Trace value at this pixel",
+                    ),
+                },
+            )
+            _use = _edited["Use"].astype(bool)
+            st.session_state["_fa_peak_use"][_peaks_key] = dict(
+                zip(_edited["Pixel"].astype(float), _use)
+            )
+            _detected_pixels = _edited.loc[_use, "Pixel"].astype(float).tolist()
+            _excluded_pixels = (
+                _edited.loc[~_use, "Pixel"].astype(float).tolist()
+            )
+            st.caption(
+                f"{len(_detected_pixels)} of {len(_peak_df)} peaks used"
+            )
 
         st.subheader("Analysis Parameters")
         ref_wavelengths_str = st.text_input(
@@ -1205,7 +1347,6 @@ with st.sidebar:
 
         # Parse inputs and validate
         _dp_valid = _rw_valid = _rp_valid = True
-        _detected_pixels = _auto_pixels
         if len(_detected_pixels) < 2:
             _dp_valid = False
         try:
@@ -1229,9 +1370,11 @@ with st.sidebar:
         except ValueError:
             _rp_valid = False
 
-        if not _dp_valid:
+        if not _dp_valid and uploaded_file is not None:
             st.caption(
-                "\u26a0 Could not read \u22652 peak pixels from the figure legend"
+                "\u26a0 Select \u22652 peaks above"
+                if _legend_peaks
+                else "\u26a0 Could not read \u22652 peak pixels from the figure legend"
             )
         if not _rw_valid:
             st.caption(
@@ -1239,6 +1382,29 @@ with st.sidebar:
             )
         if not _rp_valid:
             st.caption("\u26a0 Reference pixels: exactly 2 values required")
+
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stSidebarContent"] div[data-testid="stButton"] > button {
+                display: block;
+                margin: 0.4rem auto 0.2rem auto;
+                font-size: 1.15rem;
+                font-weight: 700;
+                border: 2px solid var(--greg-accent);
+                padding: 0.45rem 2rem;
+                width: 80%;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        run_analysis_btn = st.button(
+            "Run Analysis",
+            key="run_analysis_fa",
+            disabled=uploaded_file is None,
+            width="stretch",
+        )
 
 
 # ============================================================================
@@ -1415,7 +1581,7 @@ if page == "Output Angle":
         cbar.ax.tick_params(labelsize=13, colors=PLOT_AXIS)
         cbar.outline.set_edgecolor(PLOT_AXIS)
 
-        st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig, width="stretch")
 
         try:
             _littrow_export = pc.littrow_config(
@@ -1470,8 +1636,17 @@ if page == "Output Angle":
             "Geometry diagram</span>",
             unsafe_allow_html=True,
         )
-        _diag = _make_grating_diagram(alpha_deg, lines_per_mm, wavelength_nm, order_m)
-        st.pyplot(_diag, use_container_width=True)
+        _mirror_diag = st.toggle(
+            "Mirror incident beam",
+            key="mirror_diagram_oa",
+            help="Flip the diagram left-right so the incident beam comes in "
+            "from the right. Only the drawing changes; the angles and sign "
+            "convention stay the same.",
+        )
+        _diag = _make_grating_diagram(
+            alpha_deg, lines_per_mm, wavelength_nm, order_m, mirror=_mirror_diag
+        )
+        st.pyplot(_diag, width="stretch")
         plt.close(_diag)
 
 
@@ -1599,7 +1774,7 @@ elif page == "Sampling Sweep":
         ax.grid(True, alpha=0.3, linestyle="--", color=PLOT_GRID)
         ax.legend(loc="best", fontsize=13)
 
-        st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig, width="stretch")
 
         # ── Resolution over the same sweep
         fig_r = Figure(figsize=(10, 4.5), dpi=360, facecolor=PLOT_BG)
@@ -1626,7 +1801,7 @@ elif page == "Sampling Sweep":
                        fontweight="bold", color=PLOT_AXIS)
         ax_r.grid(True, alpha=0.3, linestyle="--", color=PLOT_GRID)
         ax_r.legend(loc="best", fontsize=12)
-        st.pyplot(fig_r, use_container_width=True)
+        st.pyplot(fig_r, width="stretch")
 
         _sweep_column = {
             "f (mm)": "focal_length_mm",
@@ -1719,7 +1894,7 @@ elif page == "Spectrometer Analysis":
         _c_left, _col_ref, _c_right = st.columns([1, 3, 1])
         with _col_ref:
             st.image(
-                st.session_state["fa_raw_pkl_png"], use_container_width=True
+                st.session_state["fa_raw_pkl_png"], width="stretch"
             )
         st.divider()
 
@@ -1799,6 +1974,7 @@ elif page == "Spectrometer Analysis":
                     "inputs": {
                         "source_file": uploaded_file.name,
                         "detected_pixels": list(_detected_pixels),
+                        "excluded_pixels": list(_excluded_pixels),
                         "ref_wavelengths_nm": list(_ref_wavelengths),
                         "ref_pixels": list(_ref_pixels),
                         "tolerance_px": tolerance_px_fa,
@@ -1988,7 +2164,7 @@ elif page == "Spectrometer Analysis":
                     """,
                     unsafe_allow_html=True,
                 )
-                st.image(figs_png[key], use_container_width=True)
+                st.image(figs_png[key], width="stretch")
 
         # ── Download all plots as a single PNG grid
         _imgs = [Image.open(io.BytesIO(figs_png[k])) for k, *_ in _plot_meta]
@@ -2221,7 +2397,7 @@ else:
                 on_click=_su_send,
                 args=(_target,),
                 disabled=not _can_send,
-                use_container_width=True,
+                width="stretch",
             )
     with _s3:
         st.caption(
@@ -2288,7 +2464,7 @@ else:
                     on_click=_su_jump,
                     args=(lam, in_air),
                     help=desc,
-                    use_container_width=True,
+                    width="stretch",
                 )
 
     def _band_range(lo: float, hi: float) -> str:

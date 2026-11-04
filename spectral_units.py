@@ -262,7 +262,7 @@ IR_BANDS = [  # vacuum, nm
 
 def neon_lines(min_intensity: float = 5000.0) -> List[Tuple[str, float, str]]:
     """Strong Ne I lines from greg's NIST table (air wavelengths, 400–900 nm)."""
-    with open(Path(__file__).parent / "nist_neon.json") as fh:
+    with open(Path(__file__).parent / "nist_neon.json", encoding="utf-8") as fh:
         lines = json.load(fh)["neon_lines"]
     return [
         ("Neon", float(wl), "Neutral neon (Ne I), air wavelength")
