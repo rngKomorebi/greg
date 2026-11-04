@@ -1,2 +1,7 @@
 [server]
 runOnSave = true
+
+[global]
+# Page settings are restored through session state when returning to a page
+# (see _kept_widgets in grating_streamlit.py); that is intended, not a bug.
+disableWidgetStateDuplicationWarning = true

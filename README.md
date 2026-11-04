@@ -1,5 +1,7 @@
 ﻿# GREG - Grating Equation Generator
 
+![Tests](https://github.com/rngKomorebi/greg/actions/workflows/tests.yml/badge.svg)
+
 **GREG** is an interactive web app for diffraction grating analysis and spectrometer design. Built with Streamlit and Python, it provides real-time calculations and visualizations for optical engineers and researchers.
 
 **Try it live**: [gregapp.streamlit.app](https://gregapp.streamlit.app/)
@@ -117,21 +119,49 @@ diffracted beam. With the lens along the grating normal (x = f·tan β) it is
 (d·cos³β)/(m·f).
 
 ## Requirements
-- Python 3.9+
-- streamlit >= 1.28.0
-- numpy >= 1.24.0
-- matplotlib >= 3.9.0, < 3.10.0
-- scipy >= 1.10.0
+- Python 3.10 – 3.14, on Windows or Linux
+- streamlit >= 1.56, < 2
+- numpy >= 1.24, < 3
+- matplotlib == 3.10.8
+- scipy >= 1.10, < 2
+- pandas >= 1.4, < 4
+- pillow >= 7.1, < 14
+
+Each dependency is capped below its next major version, where APIs get
+removed. matplotlib is pinned exactly because the Spectrometer Analysis page
+reads figures pickled by daplis with matplotlib 3.10.8, and pickled figures do
+not survive a matplotlib upgrade. That pin is also why Python 3.15 is not
+supported: matplotlib 3.10 has no wheels for it.
+
+## Tests
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The tests build synthetic sensor figures with known Neon lines, so they need
+no measurement data. They cover the physics and unit conversions, the
+spectrometer analysis end to end, the data export, and a headless run of every
+app page. GitHub Actions runs them on Windows and Ubuntu with every supported
+Python on each push.
 
 ## File Structure
 ```
 greg/
-├── grating_streamlit.py    # Main Streamlit app (3 pages)
-├── physics_core.py         # Grating equation & sampling calculations
+├── grating_streamlit.py    # Main Streamlit app (4 pages)
+├── physics_core.py         # Grating equation, sampling, resolution model
 ├── analysis_core.py        # Spectrometer calibration, 6 plot functions
+├── spectral_units.py       # Wavelength / frequency / wavenumber conversions
+├── export_core.py          # Data export (CSV + JSON ZIP)
+├── nist_neon.json          # NIST Neon reference lines
 ├── .streamlit/
-│   └── config.toml         # Streamlit config (auto-rerun on save)
-├── requirements.txt        # Python dependencies
+│   └── config.toml         # Streamlit config
+├── .github/workflows/
+│   └── tests.yml           # Test matrix: Windows + Ubuntu, Python 3.10–3.14
+├── tests/                  # pytest suite
+├── requirements.txt        # Python dependencies (capped)
+├── requirements-dev.txt    # + pytest
+├── pytest.ini
 ├── LICENSE                 # MIT License
 └── README.md               # This file
 ```

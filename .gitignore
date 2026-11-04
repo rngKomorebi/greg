@@ -31,9 +31,13 @@ wheels/
 *~
 .DS_Store
 
+# Test caches
+.pytest_cache/
+
 # Data files (but keep example file)
 *.csv
 *.txt
 *.dat
 !requirements.txt
+!requirements-dev.txt
 !example_spectrum.csv

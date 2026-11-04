@@ -5,6 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2026-11-04
+
+### Added
+
+- **Peak selection on Spectrometer Analysis.** A scrollable **Detected
+  Peaks** table in the sidebar lists every peak read from the figure legend
+  (pixel and trace value) with a **Use** tick box; unticked peaks are left
+  out of the matching and the Gaussian fit. **Merge peaks within (px)**
+  (default 2, 0 turns it off) treats peaks that close together as one line
+  and starts only the strongest ticked, so a line split by a dead or hot
+  pixel is not counted twice. `run.json` records the excluded pixels as
+  `excluded_pixels`.
+- New `analysis_core.extract_peaks_from_legend` (pixel, signal and label per
+  peak) and `analysis_core.flag_close_peaks`.
+- **Mirror incident beam** switch on the Output Angle geometry diagram:
+  flips the drawing left-right so the beam comes in from the right. Only the
+  picture changes, not the angles or the sign convention.
+- **Settings survive page switches.** Leaving a page used to reset every
+  input on it. Page 1–3 settings are now kept and restored on return. On
+  Spectrometer Analysis this includes the loaded file (the upload box itself
+  comes back empty, but the analysis keeps using the file until another is
+  uploaded), the peak ticks and the last results.
+  `.streamlit/config.toml` turns off the widget-state duplication warning
+  that restoring the values would otherwise raise.
+- **Test suite** (`tests/`, run with `python -m pytest`) on synthetic sensor
+  figures with known Neon lines, so no measurement data is needed: module
+  imports, grating equation and dispersion against numerical derivatives,
+  the resolution budget, unit conversions, legend parsing, duplicate peaks,
+  the Gaussian fit (including a speed regression test), the analysis end to
+  end, the data export, and a headless run of every app page, including the
+  analysis and settings surviving a page switch.
+- **GitHub Actions workflow** (`.github/workflows/tests.yml`) running the
+  tests on Windows and Ubuntu with Python 3.10–3.14 on every push and pull
+  request.
+- `requirements-dev.txt` (requirements plus pytest) and `pytest.ini`.
+- **Deprecation guards in the tests.** The app tests fail when Streamlit
+  reports any deprecation while the app runs, and `pytest.ini` turns
+  `DeprecationWarning`, `PendingDeprecationWarning` and `FutureWarning`
+  raised from GREG's own code into errors. Since CI installs the newest
+  allowed versions, a newly deprecated call fails the build months before
+  the release that removes it.
+
+### Changed
+
+- **Run Analysis** is now at the bottom of the Spectrometer Analysis
+  sidebar, below the analysis parameters.
+- Pixel pitch and sensor size are stacked instead of side by side; in two
+  columns at the default sidebar width one label wrapped, leaving the inputs
+  misaligned, and the pitch was cut off.
+- **Dependencies are capped** below their next major version
+  (`streamlit>=1.56,<2`, `numpy>=1.24,<3`, `scipy>=1.10,<2`,
+  `pandas>=1.4,<4`, `pillow>=7.1,<14`), so a new major release cannot
+  reach a fresh install untested. pandas and pillow, imported directly, are
+  now listed. The streamlit floor rises from 1.43 to 1.56, for `st.iframe`
+  (below). `matplotlib==3.10.8` stays pinned exactly: under matplotlib 3.11, plots A
+  and E fail on figures pickled with 3.10.8. Supported Python is 3.10–3.14
+  (the README said 3.9+, which matplotlib 3.10 does not install on); 3.15 is
+  out because matplotlib 3.10 has no wheels for it.
+- The Neon reference JSON is read as UTF-8 explicitly instead of in the
+  system's default encoding.
+- **Deprecated Streamlit APIs replaced** before they are removed:
+  `use_container_width=True` becomes `width="stretch"` (10 places; removal
+  announced for after 2025-12-31), and the theme-sync script moves from
+  `components.html` to `st.iframe` (removal announced for after
+  2026-06-01, so any new release could have broken the app).
+
+### Fixed
+
+- **Spectrometer Analysis was very slow on narrow lines.** `fit_gaussians`
+  started every peak at σ = (trace length)/50, about 10 px for a 512-px
+  trace, while real lines can be under 1 px wide. A 4-peak fit took 6 s and
+  a 9-peak fit ran for over 2 min before failing, losing plot F. The
+  starting σ is now taken from each peak's width at half maximum: the same
+  fits take 0.02 s and 0.2 s.
+- Legend parsing read the largest number in each label as the pixel, so
+  "Peak at 19, Rate: 29.94 kHz" gave pixel 29.94. It now reads the number
+  after "Peak at", falling back to the old rule for other label formats.
+
 ## [0.0.5] - 2026-10-31
 
 ### Added

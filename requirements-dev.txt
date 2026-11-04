@@ -1,0 +1,5 @@
+# What the Tests workflow installs: the app's dependencies plus pytest.
+#   pip install -r requirements-dev.txt
+#   python -m pytest
+-r requirements.txt
+pytest>=7,<10
